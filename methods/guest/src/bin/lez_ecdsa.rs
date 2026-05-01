@@ -29,14 +29,13 @@ fn main() {
 
     let digest = keccak256(&input.message);
 
-    let sig = Signature::from_slice(&input.signature[..64])
-        .expect("malformed signature r||s");
+    let sig = Signature::from_slice(&input.signature[..64]).expect("malformed signature r||s");
     let v_norm = input.signature[64]
         .checked_sub(27)
         .expect("v must be 27 or 28");
     let recovery_id = RecoveryId::try_from(v_norm).expect("invalid recovery id");
-    let pk = VerifyingKey::recover_from_prehash(&digest, &sig, recovery_id)
-        .expect("ecrecover failed");
+    let pk =
+        VerifyingKey::recover_from_prehash(&digest, &sig, recovery_id).expect("ecrecover failed");
 
     let pk_uncompressed = pk.to_encoded_point(false);
     let pk_hash = keccak256(&pk_uncompressed.as_bytes()[1..]);

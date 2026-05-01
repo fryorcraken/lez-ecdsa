@@ -8,6 +8,10 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
+  # Skip RISC Zero guest compilation in CI — the riscv32im-risc0-zkvm-elf
+  # target is provided by `rzup`, not stock rustup. methods/build.rs emits
+  # a stub ELF. Guest correctness is verified locally via `bench_verify`.
+  RISC0_SKIP_BUILD: "1"
 
 jobs:
   fmt:
@@ -15,10 +19,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust toolchain (from rust-toolchain.toml)
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
+      - name: Install pinned toolchain with rustfmt
+        run: |
+          rustup toolchain install 1.92.0 --component rustfmt --profile minimal
+          rustup default 1.92.0
       - run: cargo fmt --all --check
 
   clippy:
@@ -26,10 +30,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+      - name: Install pinned toolchain with clippy
+        run: |
+          rustup toolchain install 1.92.0 --component clippy --profile minimal
+          rustup default 1.92.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -38,7 +42,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned toolchain
+        run: |
+          rustup toolchain install 1.92.0 --profile minimal
+          rustup default 1.92.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace

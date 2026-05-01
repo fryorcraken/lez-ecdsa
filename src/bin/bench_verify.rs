@@ -36,9 +36,7 @@ fn make_test_vector() -> VerifyInput {
     let message = b"hello redstone".to_vec();
     let digest = keccak256(&message);
 
-    let (sig, recovery_id) = sk
-        .sign_prehash_recoverable(&digest)
-        .expect("sign prehash");
+    let (sig, recovery_id) = sk.sign_prehash_recoverable(&digest).expect("sign prehash");
     let mut signature = vec![0u8; 65];
     signature[..64].copy_from_slice(&sig.to_bytes());
     signature[64] = recovery_id.to_byte() + 27;
