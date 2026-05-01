@@ -1,0 +1,6 @@
+target/
+Cargo.lock.bak
+.env.local
+.scaffold
+fixtures/
+.claude/

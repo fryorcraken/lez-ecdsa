@@ -1,0 +1,16 @@
+[package]
+name = "lez_ecdsa_programs"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[dependencies]
+risc0-zkvm.workspace = true
+serde.workspace = true
+k256 = { workspace = true, features = ["arithmetic"] }
+tiny-keccak.workspace = true
+
+[[bin]]
+name = "lez_ecdsa"
+path = "src/bin/lez_ecdsa.rs"
+test = false

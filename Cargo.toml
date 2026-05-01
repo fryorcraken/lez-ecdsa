@@ -1,0 +1,43 @@
+[package]
+name = "lez-ecdsa"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[workspace.package]
+license = "MIT or Apache-2.0"
+
+[workspace]
+resolver = "3"
+members = [
+  ".",
+  "methods",
+  "methods/guest",
+]
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+
+[workspace.dependencies]
+risc0-zkvm = { version = "3.0.5", features = ["std"] }
+risc0-build = "3.0.5"
+
+serde = { version = "1.0.228", features = ["derive"] }
+hex = "0.4.3"
+k256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+tiny-keccak = { version = "2.0", features = ["keccak"] }
+
+[patch.crates-io]
+sha2 = { git = "https://github.com/risc0/RustCrypto-hashes", tag = "sha2-v0.10.9-risczero.0" }
+k256 = { git = "https://github.com/risc0/RustCrypto-elliptic-curves", tag = "k256/v0.13.4-risczero.1" }
+crypto-bigint = { git = "https://github.com/risc0/RustCrypto-crypto-bigint", tag = "v0.5.5-risczero.0" }
+tiny-keccak = { git = "https://github.com/risc0/tiny-keccak", tag = "tiny-keccak/v2.0.2-risczero.0" }
+
+[dependencies]
+lez_ecdsa_methods = { path = "methods" }
+risc0-zkvm.workspace = true
+serde.workspace = true
+hex.workspace = true
+k256 = { workspace = true, features = ["arithmetic"] }
+tiny-keccak.workspace = true
+bincode = "1.3"
