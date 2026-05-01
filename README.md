@@ -150,35 +150,43 @@ debug `cargo build --workspace` on every push and PR.
 
 ## Results
 
-First end-to-end run on commodity hardware. Single-run numbers; will be
-replaced with mean ± stddev over 5 runs in a follow-up.
+End-to-end runs on commodity hardware. Single-run numbers per cell;
+mean ± stddev over 5 runs is a follow-up. Machine: **AMD Ryzen 9 7940HS,
+16 threads, 60 GiB RAM, CPU prove (no CUDA, no Bonsai)**. Stack:
+risc0-zkvm 3.0.5, LEZ v0.2.0-rc3, patched k256/tiny-keccak/sha2/crypto-bigint.
 
-| Metric | Value |
-|---|---|
-| Total cycles | **1,048,576** (one 2²⁰ segment) |
-| User cycles | **639,949** |
-| Prove time | **230.8 s** (~3 min 51 s, single run) |
-| Receipt size | **504,735 bytes** (~493 KiB) |
-| Machine | AMD Ryzen 9 7940HS, 16 threads, 60 GiB RAM (CPU prove, no CUDA) |
-| risc0-zkvm | 3.0.5 |
-| LEZ | v0.2.0-rc3 |
+| Variant | N | user cycles | total cycles | prove time | receipt size |
+|---|---:|---:|---:|---:|---:|
+| `recover_from_prehash` (v1) | 1 | 639,802 | 1,048,576 | 253.8 s | 493 KiB |
+| `recover_from_prehash` (v1) | 3 | 1,881,476 | 2,097,152 | 381.5 s | 768 KiB |
+| `verify_prehash` (v2, current) | 1 | **341,111** | 524,288 | **130.3 s** | 480 KiB |
+| `verify_prehash` (v2, current) | 3 | **993,219** | 1,114,112 | **225.1 s** | 709 KiB |
 
-Interpretation:
+**Optimization that landed (v1 → v2):** swap `VerifyingKey::recover_from_prehash`
+for `verify_prehash` against a known pubkey. This drops the "find which
+pubkey matches this `r`" step entirely. For RedStone-style consumers
+(allowlist of known signers, identified by pubkey) this is the natural
+shape — recovery semantics are only needed when the signer is unknown.
 
-- Total cycles is rounded up to the nearest 2²⁰ segment by the prover, so
-  the actual circuit work is ~640K cycles. Future multi-sig (M-of-N) cost
-  scales roughly linearly with M for the ECDSA verifies but only adds
-  modest overhead for the keccak passes.
-- ~3.85 min CPU prove for one verification on a laptop-class chip is the
-  baseline; GPU (CUDA) and Bonsai remote proving would each cut this
-  significantly.
-- ~500 KiB receipt is the unsuccinct STARK; wrapping in Groth16 (`risc0-zkvm`
-  succinct receipt) shrinks it to ~256 bytes if on-chain footprint matters.
+The trade-off: input is `pubkey: Vec<u8>` (33-byte SEC1-compressed) per
+signer instead of `expected_signer: [u8; 20]` (Ethereum address). On-chain
+storage of the allowlist is +13 B/signer.
+
+Per-signature kernel cost (verify variant):
+
+- ~331K user cycles per ECDSA verify (linear with N).
+- 1 sig fits in a single 2¹⁹-cycle segment.
+- 3 sigs straddles 2 segments (one full 2²⁰, one tiny ~65K).
+
+Headline take: **~47% fewer cycles, ~45% less prove time, ~5–8% smaller
+receipt** vs the recover-based first cut. Single-sig private TX is now
+~2 min CPU prove; 3-sig is ~3:45 CPU prove.
 
 To reproduce:
 
 ```bash
-RISC0_DEV_MODE=0 cargo run --release --bin bench_verify
+RISC0_DEV_MODE=0 LEZ_ECDSA_SIGNERS=1 cargo run --release --bin bench_verify
+RISC0_DEV_MODE=0 LEZ_ECDSA_SIGNERS=3 cargo run --release --bin bench_verify
 ```
 
 ## Roadmap

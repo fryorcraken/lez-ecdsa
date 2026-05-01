@@ -1,19 +1,26 @@
-use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
+use k256::ecdsa::{Signature, VerifyingKey, signature::hazmat::PrehashVerifier};
 use risc0_zkvm::guest::env;
 use serde::{Deserialize, Serialize};
 use tiny_keccak::{Hasher, Keccak};
 
 #[derive(Serialize, Deserialize)]
+struct SignerVerification {
+    /// SEC1-encoded pubkey (33 bytes compressed, or 65 uncompressed).
+    pubkey: Vec<u8>,
+    /// 64 bytes: r || s. No recovery byte — `verify`, not `recover`.
+    signature: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize)]
 struct VerifyInput {
     message: Vec<u8>,
-    signature: Vec<u8>,
-    expected_signer: [u8; 20],
+    signers: Vec<SignerVerification>,
 }
 
 #[derive(Serialize, Deserialize)]
 struct VerifyOutput {
-    recovered: [u8; 20],
-    matches: bool,
+    valid_count: u32,
+    all_valid: bool,
 }
 
 fn keccak256(bytes: &[u8]) -> [u8; 32] {
@@ -24,27 +31,31 @@ fn keccak256(bytes: &[u8]) -> [u8; 32] {
     out
 }
 
+fn verify_one(digest: &[u8; 32], pubkey: &[u8], signature: &[u8]) -> bool {
+    let vk = match VerifyingKey::from_sec1_bytes(pubkey) {
+        Ok(vk) => vk,
+        Err(_) => return false,
+    };
+    let sig = match Signature::from_slice(signature) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    vk.verify_prehash(digest, &sig).is_ok()
+}
+
 fn main() {
     let input: VerifyInput = env::read();
-
     let digest = keccak256(&input.message);
 
-    let sig = Signature::from_slice(&input.signature[..64]).expect("malformed signature r||s");
-    let v_norm = input.signature[64]
-        .checked_sub(27)
-        .expect("v must be 27 or 28");
-    let recovery_id = RecoveryId::try_from(v_norm).expect("invalid recovery id");
-    let pk =
-        VerifyingKey::recover_from_prehash(&digest, &sig, recovery_id).expect("ecrecover failed");
+    let mut valid_count: u32 = 0;
+    for s in &input.signers {
+        if verify_one(&digest, &s.pubkey, &s.signature) {
+            valid_count += 1;
+        }
+    }
 
-    let pk_uncompressed = pk.to_encoded_point(false);
-    let pk_hash = keccak256(&pk_uncompressed.as_bytes()[1..]);
-    let mut recovered = [0u8; 20];
-    recovered.copy_from_slice(&pk_hash[12..]);
-
-    let out = VerifyOutput {
-        matches: recovered == input.expected_signer,
-        recovered,
-    };
-    env::commit(&out);
+    env::commit(&VerifyOutput {
+        all_valid: valid_count as usize == input.signers.len(),
+        valid_count,
+    });
 }

@@ -1,15 +1,26 @@
 use k256::ecdsa::SigningKey;
-use lez_ecdsa::VerifyInput;
+use lez_ecdsa::{SignerVerification, VerifyInput, VerifyOutput};
 use lez_ecdsa_methods::LEZ_ECDSA_ELF;
 use risc0_zkvm::{ExecutorEnv, default_prover};
-use serde::Deserialize;
 use tiny_keccak::{Hasher, Keccak};
 
-#[derive(Deserialize)]
-struct VerifyOutput {
-    recovered: [u8; 20],
-    matches: bool,
-}
+const SEEDS: &[[u8; 32]] = &[
+    [
+        0x4c, 0x0a, 0xc8, 0x6f, 0x12, 0x4d, 0xa0, 0x91, 0xc7, 0x3e, 0xb8, 0x55, 0x29, 0x6e, 0xfb,
+        0x10, 0x00, 0xc4, 0x4d, 0x68, 0xa9, 0xa3, 0x6e, 0x2d, 0x83, 0xb1, 0x55, 0x77, 0x91, 0x6e,
+        0xab, 0xcd,
+    ],
+    [
+        0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
+        0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
+        0x77, 0x01,
+    ],
+    [
+        0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6, 0x07, 0x18, 0x29, 0x3a, 0x4b, 0x5c, 0x6d, 0x7e, 0x8f,
+        0x90, 0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6, 0x07, 0x18, 0x29, 0x3a, 0x4b, 0x5c, 0x6d, 0x7e,
+        0x8f, 0x02,
+    ],
+];
 
 fn keccak256(bytes: &[u8]) -> [u8; 32] {
     let mut h = Keccak::v256();
@@ -19,33 +30,28 @@ fn keccak256(bytes: &[u8]) -> [u8; 32] {
     out
 }
 
-fn make_test_vector() -> VerifyInput {
-    let sk_bytes: [u8; 32] = [
-        0x4c, 0x0a, 0xc8, 0x6f, 0x12, 0x4d, 0xa0, 0x91, 0xc7, 0x3e, 0xb8, 0x55, 0x29, 0x6e, 0xfb,
-        0x10, 0x00, 0xc4, 0x4d, 0x68, 0xa9, 0xa3, 0x6e, 0x2d, 0x83, 0xb1, 0x55, 0x77, 0x91, 0x6e,
-        0xab, 0xcd,
-    ];
-    let sk = SigningKey::from_bytes((&sk_bytes).into()).expect("seed -> sk");
-    let vk = sk.verifying_key();
-
-    let pk_uncompressed = vk.to_encoded_point(false);
-    let pk_hash = keccak256(&pk_uncompressed.as_bytes()[1..]);
-    let mut expected_signer = [0u8; 20];
-    expected_signer.copy_from_slice(&pk_hash[12..]);
+fn make_test_vector(num_signers: usize) -> VerifyInput {
+    assert!(num_signers <= SEEDS.len(), "only {} seeds available", SEEDS.len());
 
     let message = b"hello redstone".to_vec();
     let digest = keccak256(&message);
 
-    let (sig, recovery_id) = sk.sign_prehash_recoverable(&digest).expect("sign prehash");
-    let mut signature = vec![0u8; 65];
-    signature[..64].copy_from_slice(&sig.to_bytes());
-    signature[64] = recovery_id.to_byte() + 27;
+    let signers = SEEDS
+        .iter()
+        .take(num_signers)
+        .map(|seed| {
+            let sk = SigningKey::from_bytes(seed.into()).expect("seed -> sk");
+            // Compressed SEC1 pubkey (33 bytes).
+            let pubkey = sk.verifying_key().to_encoded_point(true).as_bytes().to_vec();
 
-    VerifyInput {
-        message,
-        signature,
-        expected_signer,
-    }
+            let (sig, _recovery_id) = sk.sign_prehash_recoverable(&digest).expect("sign prehash");
+            let signature = sig.to_bytes().to_vec();
+
+            SignerVerification { pubkey, signature }
+        })
+        .collect();
+
+    VerifyInput { message, signers }
 }
 
 fn main() {
@@ -54,8 +60,16 @@ fn main() {
         std::process::exit(1);
     }
 
-    let input = make_test_vector();
-    println!("expected_signer = 0x{}", hex::encode(input.expected_signer));
+    let num_signers: usize = std::env::var("LEZ_ECDSA_SIGNERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+
+    println!("num_signers  = {num_signers}");
+    let input = make_test_vector(num_signers);
+    for (i, s) in input.signers.iter().enumerate() {
+        println!("signer[{i}]    = pubkey 0x{}", hex::encode(&s.pubkey));
+    }
 
     let env = ExecutorEnv::builder()
         .write(&input)
@@ -74,15 +88,15 @@ fn main() {
     let out: VerifyOutput = receipt.journal.decode().expect("decode journal");
 
     println!("---");
-    println!("matches      = {}", out.matches);
-    println!("recovered    = 0x{}", hex::encode(out.recovered));
+    println!("all_valid    = {}", out.all_valid);
+    println!("valid_count  = {}", out.valid_count);
     println!("total_cycles = {}", prove_info.stats.total_cycles);
     println!("user_cycles  = {}", prove_info.stats.user_cycles);
     println!("prove_time   = {:?}", elapsed);
     println!("receipt_size = {} bytes", receipt_bytes.len());
 
-    if !out.matches {
-        eprintln!("ERROR: recovered address did not match expected_signer");
+    if !out.all_valid {
+        eprintln!("ERROR: at least one signer did not verify");
         std::process::exit(2);
     }
 }
