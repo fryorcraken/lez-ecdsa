@@ -19,6 +19,12 @@ members = [
 unsafe_code = "warn"
 
 [workspace.dependencies]
+nssa = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.0-rc3" }
+nssa_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.0-rc3" }
+wallet = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.0-rc3" }
+common = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.0-rc3" }
+sequencer_service_rpc = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.0-rc3" }
+
 risc0-zkvm = { version = "3.0.5", features = ["std"] }
 risc0-build = "3.0.5"
 
@@ -26,6 +32,8 @@ serde = { version = "1.0.228", features = ["derive"] }
 hex = "0.4.3"
 k256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
 tiny-keccak = { version = "2.0", features = ["keccak"] }
+clap = { version = "4.5", features = ["derive"] }
+tokio = { version = "1.28", features = ["macros", "rt-multi-thread"] }
 
 [patch.crates-io]
 sha2 = { git = "https://github.com/risc0/RustCrypto-hashes", tag = "sha2-v0.10.9-risczero.0" }
@@ -35,9 +43,17 @@ tiny-keccak = { git = "https://github.com/risc0/tiny-keccak", tag = "tiny-keccak
 
 [dependencies]
 lez_ecdsa_methods = { path = "methods" }
+nssa.workspace = true
+nssa_core.workspace = true
+wallet.workspace = true
+common.workspace = true
+sequencer_service_rpc = { workspace = true, features = ["client"] }
+
 risc0-zkvm.workspace = true
 serde.workspace = true
 hex.workspace = true
 k256 = { workspace = true, features = ["arithmetic"] }
 tiny-keccak.workspace = true
+clap.workspace = true
+tokio.workspace = true
 bincode = "1.3"

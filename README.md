@@ -44,8 +44,8 @@ lands, the verifier kernel here can be wrapped in `#[lez_program]` /
 │       ├── Cargo.toml                   # guest deps (risc0-zkvm, k256, tiny-keccak)
 │       └── src/bin/lez_ecdsa.rs         # the verifier guest binary
 ├── src/
-│   ├── lib.rs                           # shared VerifyInput type
-│   └── bin/bench_verify.rs              # host: synthetic vector + prove + measure
+│   ├── lib.rs                           # shared VerifyInput type + test-vector builder
+│   └── bin/run_private.rs               # host: submit privacy-preserving TX, time end-to-end
 ├── Cargo.toml                           # workspace + [patch.crates-io] for risc0 forks
 ├── rust-toolchain.toml                  # pins toolchain
 ├── scaffold.toml                        # logos-scaffold metadata (not required for cargo build)
@@ -179,15 +179,54 @@ Per-signature kernel cost (verify variant):
 - 3 sigs straddles 2 segments (one full 2²⁰, one tiny ~65K).
 
 Headline take: **~47% fewer cycles, ~45% less prove time, ~5–8% smaller
-receipt** vs the recover-based first cut. Single-sig private TX is now
+receipt** vs the recover-based first cut. Single-sig kernel is now
 ~2 min 10 s CPU prove; 3-sig is ~3 min 45 s CPU prove.
 
-To reproduce:
+### End-to-end private-TX time (Pass 2)
+
+The numbers above are the bare cryptographic kernel under `risc0_zkvm`'s
+`default_prover()`. The number a user actually feels — "click submit on a
+privacy-preserving transaction → confirmation back from the sequencer" —
+adds NSSA framing, the privacy-preserving circuit (which proves the
+account-state transition on top of our verifier), and the sequencer
+roundtrip. Measured against a local `lgs localnet` against a fresh
+PrivateOwned account:
+
+| N signers | Bare kernel | Full private TX | PP wrapping overhead |
+|---:|---:|---:|---:|
+| 1 | 130.3 s (~2 min 10 s) | **212.7 s (~3 min 33 s)** | +82.4 s (+63%) |
+| 3 | 225.1 s (~3 min 45 s) | **387.9 s (~6 min 28 s)** | +162.8 s (+72%) |
+
+The privacy-preserving wrapping is not a fixed overhead — it scales
+roughly with the kernel cycle count (the privacy circuit re-proves
+account-state transitions over the verifier's commitments). Net: a
+RedStone-shaped 3-of-N pull on a laptop CPU is **~6½ minutes** of user
+wait. CUDA / Bonsai would compress this dramatically; CPU alone is too
+heavy for interactive UX.
+
+To reproduce the end-to-end private-TX time:
 
 ```bash
-RISC0_DEV_MODE=0 LEZ_ECDSA_SIGNERS=1 cargo run --release --bin bench_verify
-RISC0_DEV_MODE=0 LEZ_ECDSA_SIGNERS=3 cargo run --release --bin bench_verify
+# 1. Start localnet (one-time per session)
+lgs localnet start
+
+# 2. Deploy the program (one-time per code change)
+lgs deploy
+
+# 3. Create a fresh PrivateOwned account if you don't have one
+NSSA_WALLET_HOME_DIR="$PWD/.scaffold/wallet" \
+  ~/.cache/logos-scaffold/repos/lez/<sha>/target/release/wallet \
+  account new private
+
+# 4. Run the timed submission
+NSSA_WALLET_HOME_DIR="$PWD/.scaffold/wallet" RISC0_DEV_MODE=0 \
+  cargo run --release --bin run_private -- \
+  --account-id Private/<your-fresh-account-id> --num-signers 3
 ```
+
+_Note: the bare-kernel `bench_verify` binary was retired when the guest
+was rewrapped in NSSA shape for Pass 2 — those rows above were captured
+against an earlier risc0-direct-prover variant (commit `61cc0d6`)._
 
 ## Roadmap
 

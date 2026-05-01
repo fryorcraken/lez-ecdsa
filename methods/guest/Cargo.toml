@@ -6,6 +6,7 @@ license = { workspace = true }
 
 [dependencies]
 risc0-zkvm.workspace = true
+nssa_core.workspace = true
 serde.workspace = true
 k256 = { workspace = true, features = ["arithmetic"] }
 tiny-keccak.workspace = true

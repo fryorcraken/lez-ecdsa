@@ -1,13 +1,11 @@
 use k256::ecdsa::{Signature, VerifyingKey, signature::hazmat::PrehashVerifier};
-use risc0_zkvm::guest::env;
+use nssa_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_nssa_inputs};
 use serde::{Deserialize, Serialize};
 use tiny_keccak::{Hasher, Keccak};
 
 #[derive(Serialize, Deserialize)]
 struct SignerVerification {
-    /// SEC1-encoded pubkey (33 bytes compressed, or 65 uncompressed).
     pubkey: Vec<u8>,
-    /// 64 bytes: r || s. No recovery byte — `verify`, not `recover`.
     signature: Vec<u8>,
 }
 
@@ -15,12 +13,6 @@ struct SignerVerification {
 struct VerifyInput {
     message: Vec<u8>,
     signers: Vec<SignerVerification>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct VerifyOutput {
-    valid_count: u32,
-    all_valid: bool,
 }
 
 fn keccak256(bytes: &[u8]) -> [u8; 32] {
@@ -31,31 +23,36 @@ fn keccak256(bytes: &[u8]) -> [u8; 32] {
     out
 }
 
-fn verify_one(digest: &[u8; 32], pubkey: &[u8], signature: &[u8]) -> bool {
-    let vk = match VerifyingKey::from_sec1_bytes(pubkey) {
-        Ok(vk) => vk,
-        Err(_) => return false,
-    };
-    let sig = match Signature::from_slice(signature) {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
-    vk.verify_prehash(digest, &sig).is_ok()
-}
-
 fn main() {
-    let input: VerifyInput = env::read();
-    let digest = keccak256(&input.message);
+    let (
+        ProgramInput {
+            self_program_id,
+            caller_program_id,
+            pre_states,
+            instruction,
+        },
+        instruction_data,
+    ) = read_nssa_inputs::<VerifyInput>();
 
-    let mut valid_count: u32 = 0;
-    for s in &input.signers {
-        if verify_one(&digest, &s.pubkey, &s.signature) {
-            valid_count += 1;
-        }
+    let digest = keccak256(&instruction.message);
+    for s in &instruction.signers {
+        let vk = VerifyingKey::from_sec1_bytes(&s.pubkey).expect("bad pubkey");
+        let sig = Signature::from_slice(&s.signature).expect("bad sig");
+        vk.verify_prehash(&digest, &sig).expect("verify failed");
     }
 
-    env::commit(&VerifyOutput {
-        all_valid: valid_count as usize == input.signers.len(),
-        valid_count,
-    });
+    // Pass-through: verifier doesn't mutate any account.
+    let post_states: Vec<AccountPostState> = pre_states
+        .iter()
+        .map(|awm| AccountPostState::new(awm.account.clone()))
+        .collect();
+
+    ProgramOutput::new(
+        self_program_id,
+        caller_program_id,
+        instruction_data,
+        pre_states,
+        post_states,
+    )
+    .write();
 }
