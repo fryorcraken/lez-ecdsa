@@ -157,10 +157,10 @@ risc0-zkvm 3.0.5, LEZ v0.2.0-rc3, patched k256/tiny-keccak/sha2/crypto-bigint.
 
 | Variant | N | user cycles | total cycles | prove time | receipt size |
 |---|---:|---:|---:|---:|---:|
-| `recover_from_prehash` (v1) | 1 | 639,802 | 1,048,576 | 253.8 s | 493 KiB |
-| `recover_from_prehash` (v1) | 3 | 1,881,476 | 2,097,152 | 381.5 s | 768 KiB |
-| `verify_prehash` (v2, current) | 1 | **341,111** | 524,288 | **130.3 s** | 480 KiB |
-| `verify_prehash` (v2, current) | 3 | **993,219** | 1,114,112 | **225.1 s** | 709 KiB |
+| `recover_from_prehash` (v1) | 1 | 639,802 | 1,048,576 | 253.8 s (~4 min 14 s) | 493 KiB |
+| `recover_from_prehash` (v1) | 3 | 1,881,476 | 2,097,152 | 381.5 s (~6 min 22 s) | 768 KiB |
+| `verify_prehash` (v2, current) | 1 | **341,111** | 524,288 | **130.3 s (~2 min 10 s)** | 480 KiB |
+| `verify_prehash` (v2, current) | 3 | **993,219** | 1,114,112 | **225.1 s (~3 min 45 s)** | 709 KiB |
 
 **Optimization that landed (v1 → v2):** swap `VerifyingKey::recover_from_prehash`
 for `verify_prehash` against a known pubkey. This drops the "find which
@@ -180,7 +180,7 @@ Per-signature kernel cost (verify variant):
 
 Headline take: **~47% fewer cycles, ~45% less prove time, ~5–8% smaller
 receipt** vs the recover-based first cut. Single-sig private TX is now
-~2 min CPU prove; 3-sig is ~3:45 CPU prove.
+~2 min 10 s CPU prove; 3-sig is ~3 min 45 s CPU prove.
 
 To reproduce:
 
