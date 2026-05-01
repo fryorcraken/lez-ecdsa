@@ -1,40 +1,75 @@
 # lez-ecdsa
 
-PoC: secp256k1 ECDSA signature verification over keccak256 inside a
-Logos Execution Zone (LEZ) guest program, on the RISC Zero zkVM.
+A proof-of-concept guest program for the
+[Logos Execution Zone (LEZ)](https://github.com/logos-blockchain/logos-execution-zone)
+that performs **secp256k1 ECDSA signature verification over keccak256
+hashes** inside the [RISC Zero zkVM](https://risczero.com/) — the cryptographic
+kernel needed to verify [RedStone oracle](https://docs.redstone.finance/) data
+in pull mode.
 
-The goal is to **measure cost** (cycle count, prove time, receipt size)
-of one `ecrecover` over a keccak256 hash. This number gates downstream
-decisions about RedStone integration shape, multi-sig threshold cost,
-and proposed framework extensions.
+The current goal is **measurement, not deployment**: how many cycles, how much
+prove time, how big a receipt for one `ecrecover` over `keccak256(message)`?
+Those numbers gate every downstream decision (multi-sig threshold cost, push
+vs pull mode shape, eventual framework wrapping).
 
-See `SPEC.md` for acceptance criteria, `PLAN.md` for the task breakdown.
+See [`SPEC.md`](./SPEC.md) for acceptance criteria and
+[`PLAN.md`](./PLAN.md) for the task breakdown.
 
 ## Status
 
-- **Framework:** bare LEZ guest (no `spel-framework`, no `lez-framework`).
-  `logos-co/spel` was the original target but its dep tree pulls
-  `bonsai-sdk → reqwest → rustls → ring` into the `riscv32` guest target,
-  where `ring` fails to cross-compile. Filed upstream:
-  [logos-co/spel#165](https://github.com/logos-co/spel/issues/165). Once
-  resolved, this project can adopt spel macros without changing the
-  cryptographic kernel.
-- **LEZ:** pinned to `v0.2.0-rc3`.
-- **risc0-zkvm:** `3.0.5`, with patched `k256`, `tiny-keccak`, `sha2`,
-  `crypto-bigint` (RISC Zero accelerated forks).
+Bare LEZ guest, no `spel-framework` / `lez-framework` wrapper. The original
+plan was to use [`logos-co/spel`](https://github.com/logos-co/spel) for
+Anchor-style ergonomics, but its dep tree pulls
+`bonsai-sdk → reqwest → rustls → ring` into the `riscv32` guest target, where
+`ring`'s build script can't cross-compile (see upstream issue
+[logos-co/spel#165](https://github.com/logos-co/spel/issues/165)). Once that
+lands, the verifier kernel here can be wrapped in `#[lez_program]` /
+`#[instruction]` macros without changing the cryptographic core.
+
+| Component | Version |
+|---|---|
+| LEZ (`nssa`, `nssa_core`, `wallet`, `common`) | `v0.2.0-rc3` |
+| `risc0-zkvm` | `3.0.5` |
+| Patched crypto | `k256 v0.13.4-risczero.1`, `tiny-keccak v2.0.2-risczero.0`, `sha2 v0.10.9-risczero.0`, `crypto-bigint v0.5.5-risczero.0` |
+| Rust toolchain | pinned via `rust-toolchain.toml` (`1.92.0`) |
 
 ## Layout
 
 ```
 .
-├── methods/guest/src/bin/lez_ecdsa.rs   # Guest: ecrecover over keccak256
-├── methods/guest/Cargo.toml              # Guest deps (no spel)
-├── methods/                              # risc0-build harness
-├── src/lib.rs                            # Shared VerifyInput type
-├── src/bin/bench_verify.rs               # Host: synth vector + prove + measure
-├── SPEC.md                               # Acceptance criteria
-└── PLAN.md                               # Task breakdown
+├── methods/
+│   ├── Cargo.toml                       # risc0-build harness for the guest
+│   ├── build.rs                         # calls risc0_build::embed_methods()
+│   └── guest/
+│       ├── Cargo.toml                   # guest deps (risc0-zkvm, k256, tiny-keccak)
+│       └── src/bin/lez_ecdsa.rs         # the verifier guest binary
+├── src/
+│   ├── lib.rs                           # shared VerifyInput type
+│   └── bin/bench_verify.rs              # host: synthetic vector + prove + measure
+├── Cargo.toml                           # workspace + [patch.crates-io] for risc0 forks
+├── rust-toolchain.toml                  # pins toolchain
+├── scaffold.toml                        # logos-scaffold metadata (not required for cargo build)
+├── .github/workflows/ci.yml             # fmt + clippy + build CI
+├── SPEC.md                              # acceptance criteria, boundaries, non-goals
+├── PLAN.md                              # task breakdown
+└── README.md                            # this file
 ```
+
+## Prerequisites
+
+- Rust toolchain (the project pins `1.92.0` via `rust-toolchain.toml`; rustup
+  picks it up automatically).
+- The RISC Zero RISC-V guest toolchain. Install via
+  [`rzup`](https://dev.risczero.com/api/zkvm/install):
+  ```bash
+  curl -L https://risczero.com/install | bash
+  rzup install
+  ```
+  This puts `riscv32-unknown-elf-gcc` and the `riscv32im-risc0-zkvm-elf`
+  Rust target into `~/.risc0/`.
+- (Optional) [`logos-scaffold`](https://github.com/logos-co/logos-scaffold)
+  if you want to deploy via `lgs deploy` later. Not needed for the local
+  PoC.
 
 ## Build
 
@@ -42,25 +77,122 @@ See `SPEC.md` for acceptance criteria, `PLAN.md` for the task breakdown.
 cargo build --workspace
 ```
 
-## Run the bench
+This compiles the host CLI (`bench_verify`) and, via `risc0-build`, the
+RISC-V guest binary embedded as `LEZ_ECDSA_ELF`.
+
+## Run the bench yourself
 
 ```bash
 RISC0_DEV_MODE=0 cargo run --release --bin bench_verify
 ```
 
-`RISC0_DEV_MODE=1` disables actual proving and produces fake numbers
-— the bench refuses to run in that mode.
+What it does:
+
+1. Generates a deterministic secp256k1 keypair from a hardcoded 32-byte seed.
+2. Signs the message `b"hello redstone"` (keccak256-hashed) with that key.
+3. Hands `(message, signature, expected_signer_address)` to the guest.
+4. Inside the guest, `ecrecover` reconstructs the signing pubkey, derives
+   the Ethereum-style 20-byte address (`keccak256(pubkey)[12..]`), and commits
+   `(recovered_address, matches_bool)` to the receipt journal.
+5. The host decodes the journal, prints `total_cycles`, `user_cycles`,
+   `prove_time`, and `receipt_size`, and exits 0 iff `matches == true`.
+
+`RISC0_DEV_MODE=1` skips actual proving and produces fake numbers — the
+bench refuses to run in that mode (exits 1 with a `WARN` line).
+
+Expected output shape:
+
+```
+expected_signer = 0x7402fee841da96a1fc4056d778bbfa1dea509ba9
+---
+matches      = true
+recovered    = 0x7402fee841da96a1fc4056d778bbfa1dea509ba9
+total_cycles = <N>
+user_cycles  = <M>
+prove_time   = <duration>
+receipt_size = <bytes>
+```
+
+### Tweak the bench
+
+The synthetic vector lives in `make_test_vector()` in
+`src/bin/bench_verify.rs`. Change the seed (`sk_bytes`) or the message to
+test other inputs. Flipping a single byte of `signature.r` is a quick way
+to confirm the verifier doesn't trivially pass — the bench will print
+`matches = false` (or panic with `ecrecover failed` if the signature
+doesn't decode at all).
+
+## Verify against an independent reference
+
+The recovered address printed above can be cross-checked against any
+independent secp256k1 library. With [`foundry`](https://getfoundry.sh):
+
+```bash
+# The seed used in make_test_vector(), as a hex private key:
+cast wallet address \
+  0x4c0ac86f124da091c73eb855296efb1000c44d68a9a36e2d83b15577916eabcd
+# Should print 0x7402fee841da96a1fc4056d778bbfa1dea509ba9
+```
+
+If the addresses match, the entire chain (key derivation, hashing,
+signing, verifying, recovering) is consistent.
+
+## Lint and test
+
+```bash
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+CI (`.github/workflows/ci.yml`) runs the same three commands plus a
+debug `cargo build --workspace` on every push and PR.
 
 ## Results
 
-_TODO: filled in after first bench run completes._
+First end-to-end run on commodity hardware. Single-run numbers; will be
+replaced with mean ± stddev over 5 runs in a follow-up.
 
 | Metric | Value |
 |---|---|
-| Total cycles | _pending_ |
-| User cycles | _pending_ |
-| Prove time (mean of 5) | _pending_ |
-| Receipt size | _pending_ |
+| Total cycles | **1,048,576** (one 2²⁰ segment) |
+| User cycles | **639,949** |
+| Prove time | **230.8 s** (~3 min 51 s, single run) |
+| Receipt size | **504,735 bytes** (~493 KiB) |
+| Machine | AMD Ryzen 9 7940HS, 16 threads, 60 GiB RAM (CPU prove, no CUDA) |
 | risc0-zkvm | 3.0.5 |
 | LEZ | v0.2.0-rc3 |
-| Machine | _pending_ |
+
+Interpretation:
+
+- Total cycles is rounded up to the nearest 2²⁰ segment by the prover, so
+  the actual circuit work is ~640K cycles. Future multi-sig (M-of-N) cost
+  scales roughly linearly with M for the ECDSA verifies but only adds
+  modest overhead for the keccak passes.
+- ~3.85 min CPU prove for one verification on a laptop-class chip is the
+  baseline; GPU (CUDA) and Bonsai remote proving would each cut this
+  significantly.
+- ~500 KiB receipt is the unsuccinct STARK; wrapping in Groth16 (`risc0-zkvm`
+  succinct receipt) shrinks it to ~256 bytes if on-chain footprint matters.
+
+To reproduce:
+
+```bash
+RISC0_DEV_MODE=0 cargo run --release --bin bench_verify
+```
+
+## Roadmap
+
+This PoC ships only the cryptographic kernel. Deliberately deferred (see
+[`SPEC.md`](./SPEC.md) §7):
+
+- RedStone payload parsing — synthetic test vector only for now.
+- Multi-sig threshold (M-of-N) — exactly one ECDSA verify here.
+- Push mode (write to PDA) and pull mode (output for tail call) — once
+  cost is acceptable, both modes get wired up.
+- SPeL framework wrapping — pending [logos-co/spel#165](https://github.com/logos-co/spel/issues/165).
+- Deployment via `lgs deploy` — local proving only.
+
+## License
+
+MIT or Apache-2.0 (per workspace `Cargo.toml`).
