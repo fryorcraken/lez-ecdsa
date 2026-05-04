@@ -116,25 +116,85 @@ For batch / async workloads (sub-5 min acceptable), **secp256k1 Schnorr
 or P-256 at N=3** is the budget pick. If keys / addresses must stay
 secp256k1 (Ethereum compat), Schnorr is the natural step up from ECDSA.
 
+### End-to-end private-TX time (against `lgs localnet`)
+
+The numbers above isolate the inner proving cost. The number a user
+actually feels — "click submit on a privacy-preserving transaction →
+confirmation back from the sequencer" — adds NSSA framing, the
+privacy-preserving circuit (which proves the account-state transition
+on top of our verifier), and the sequencer roundtrip. Measured against
+a fresh `lgs localnet` and a fresh `PrivateOwned` account, same
+machine, same `RISC0_DEV_MODE=0`:
+
+| scheme | N | local prove | E2E private TX | wrap overhead |
+|---|---:|---:|---:|---:|
+| `noop`              | 1 | 23.15 s (~0:23) | 103.46 s (~1:43) | +80.3 s (+347%) |
+| `ecdsa-secp256k1`   | 1 | 141.47 s (~2:21) | 246.46 s (~4:06) | +105.0 s (+74%) |
+| `ecdsa-secp256k1`   | 3 | 260.13 s (~4:20) | 446.12 s (~7:26) | +186.0 s (+72%) |
+| `schnorr-secp256k1` | 1 | 77.82 s (~1:18) | 153.67 s (~2:33) | +75.9 s (+97%) |
+| `schnorr-secp256k1` | 3 | 166.46 s (~2:46) | 322.95 s (~5:22) | +156.5 s (+94%) |
+| `ed25519`           | 1 | 153.97 s (~2:34) | 282.95 s (~4:42) | +129.0 s (+84%) |
+| `ed25519`           | 3 | 451.82 s (~7:32) | 669.66 s (~11:09) | +217.8 s (+48%) |
+| `ecdsa-p256`        | 1 | 71.44 s (~1:11) | 152.50 s (~2:32) | +81.1 s (+113%) |
+| `ecdsa-p256`        | 3 | 141.36 s (~2:21) | 298.82 s (~4:58) | +157.5 s (+111%) |
+
+The privacy-preserving wrapping adds **roughly 75–220 s** per TX. It's
+not a fixed overhead: there's a constant component (~80 s, visible on
+the `noop` row) plus a variable component that scales with the inner
+kernel's segment count. Larger kernels (e.g. `ed25519` N=3) see a lower
+*percentage* overhead because the fixed component is amortized.
+
+Scheme ranking carries over from local-prove to E2E unchanged:
+`ecdsa-p256` ≈ `schnorr-secp256k1` < `ecdsa-secp256k1` < `ed25519`.
+The wrap overhead compresses the spread (Ed25519 is ~1.9× ECDSA-k1 in
+E2E vs ~2.7× in user cycles), so for end-user latency the gap is real
+but smaller than the cycle deltas suggest.
+
+Net for the headline RedStone shape — **3-of-N pull, end-to-end**:
+
+| scheme | N=3 E2E |
+|---|---:|
+| `ecdsa-p256` | **4:58** (cheapest) |
+| `schnorr-secp256k1` | 5:22 |
+| `ecdsa-secp256k1` | 7:26 |
+| `ed25519` | 11:09 |
+
+For interactive UX (sub-30 s) **no scheme fits on CPU**. CUDA / Bonsai
+would compress this; CPU alone is too heavy.
+
 ## Methodology
 
-Each row is one **real prove pass** through `risc0_zkvm::default_prover()`
-with `RISC0_DEV_MODE=0`, against the NSSA-wrapped guest binary for that
-scheme. Inputs are written in the exact shape `nssa_core::read_nssa_inputs`
-expects (`self_program_id`, `caller_program_id`, `pre_states`, NSSA-encoded
-instruction). Cycles and segment count come from `ProveInfo.stats`;
-prove time is wall-clock around the `prove(...)` call; receipt size is
+Each local-prove row is one **real prove pass** through
+`risc0_zkvm::default_prover()` with `RISC0_DEV_MODE=0`, against the
+NSSA-wrapped guest binary for that scheme. Inputs are written in the
+exact shape `nssa_core::read_nssa_inputs` expects (`self_program_id`,
+`caller_program_id`, `pre_states`, NSSA-encoded instruction). Cycles
+and segment count come from `ProveInfo.stats`; prove time is wall-clock
+around the `prove(...)` call; receipt size is
 `bincode::serialize(&receipt).len()`.
 
-The bench does **not** submit through a real LEZ private TX — that
-requires a running devnet account and is the next milestone. See
-SPEC §1 for what end-to-end coverage adds (sequencer roundtrip,
-privacy-preserving wrapping). The numbers above isolate the **inner
-proving cost**, which is what changes between schemes.
+Each E2E row submits a real privacy-preserving transaction via
+`wallet::WalletCore::send_privacy_preserving_tx()` against a running
+`lgs localnet` (sequencer in `risc0_dev_mode=true`, client in
+`RISC0_DEV_MODE=0`). The wall clock wraps `send_privacy_preserving_tx`,
+so it includes serialization, client-side proving (kernel +
+privacy-preserving wrapping circuit), the sequencer roundtrip, and
+confirmation.
 
 Synthetic fixtures only — no captured oracle payloads. All signers
 share the same message (`b"hello redstone"`) per row, signed with
 deterministic seeds.
+
+### Receipt-size note
+
+`ecdsa-secp256k1`'s 492 KB local-prove receipt is roughly 1.8× any
+other scheme's receipt at the same segment count. This is the keccak
+coprocessor: `tiny-keccak`'s RISC0 patch routes each permutation
+through `risc0_keccak_update`, and the coprocessor's STARK proof is
+attached as a receipt assumption (~247 KB per keccak call vs ~24 KB
+for sha256-precompile use). The cost is mostly inherent to using
+keccak — switching to sha256 prehash would save the bytes but break
+Ethereum compatibility.
 
 ## Build
 
@@ -156,6 +216,14 @@ RISC0_DEV_MODE=0 cargo run --release --bin bench -- \
 # Full matrix → results/results.json + results/README-snippet.md
 RISC0_DEV_MODE=0 cargo run --release --bin bench -- --all
 
+# End-to-end matrix against a running lgs localnet
+lgs localnet start
+lgs wallet -- account new private    # note the printed Private/<id>
+NSSA_WALLET_HOME_DIR="$PWD/.scaffold/wallet" RISC0_DEV_MODE=0 \
+  cargo run --release --bin bench -- \
+  --all --account-id Private/<your-id> --label e2e
+# → results/results-e2e.json + results/README-snippet-e2e.md
+
 # Generate just the JSON fixture for one (scheme, N) point
 cargo run --release --bin gen_test_vectors -- \
   --scheme schnorr-secp256k1 --n 3
@@ -164,7 +232,9 @@ cargo run --release --bin gen_test_vectors -- \
 `RISC0_DEV_MODE=1` skips actual proving and prints fake numbers.
 The bench logs a warning when this is set; never quote those numbers.
 
-The matrix run on the reference machine takes **~28 minutes** end-to-end.
+The local matrix takes **~28 minutes** on the reference machine; the
+end-to-end matrix takes **~46 minutes** end-to-end (kernel + wrapping
++ sequencer roundtrip per row).
 
 ## Lint and test
 
@@ -221,11 +291,9 @@ every push and PR. Bench runs are local only.
 
 Deliberately deferred (see [`SPEC.md`](./SPEC.md) §9):
 
-- **End-to-end private-TX timing on a real LEZ devnet.** The bench
-  currently isolates inner proving cost; the full-TX path adds NSSA
-  framing, privacy-preserving circuit, and sequencer roundtrip — a
-  ~60–70% multiplier in earlier passes. Reproducible once a devnet
-  account_id is available; no scheme switch is needed.
+- **GPU / Bonsai prove.** All numbers above are CPU-only on the
+  reference Ryzen 9. CUDA acceleration or Bonsai would collapse prove
+  time substantially; left as future work.
 - **Threshold cryptography** (Schnorr / Ed25519 / BLS threshold sigs).
 - **Batch verification** for Schnorr and Ed25519 — could collapse
   3-of-N cost meaningfully; out of the headline matrix.
