@@ -1,5 +1,5 @@
 [package]
-name = "lez_ecdsa_programs"
+name = "lez_signature_bench_programs"
 version = "0.1.0"
 edition = "2024"
 license = { workspace = true }
@@ -9,9 +9,32 @@ risc0-zkvm.workspace = true
 nssa_core.workspace = true
 serde.workspace = true
 k256 = { workspace = true, features = ["arithmetic"] }
+p256 = { workspace = true, features = ["arithmetic"] }
+ed25519-dalek.workspace = true
+sha2.workspace = true
 tiny-keccak.workspace = true
 
 [[bin]]
-name = "lez_ecdsa"
-path = "src/bin/lez_ecdsa.rs"
+name = "ecdsa_secp256k1"
+path = "src/bin/ecdsa_secp256k1.rs"
+test = false
+
+[[bin]]
+name = "schnorr_secp256k1"
+path = "src/bin/schnorr_secp256k1.rs"
+test = false
+
+[[bin]]
+name = "ed25519"
+path = "src/bin/ed25519.rs"
+test = false
+
+[[bin]]
+name = "ecdsa_p256"
+path = "src/bin/ecdsa_p256.rs"
+test = false
+
+[[bin]]
+name = "noop"
+path = "src/bin/noop.rs"
 test = false

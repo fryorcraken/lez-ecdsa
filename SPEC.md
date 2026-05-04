@@ -1,185 +1,261 @@
-# SPEC — lez-ecdsa PoC
+# SPEC — lez-signature-bench
 
-Companion to the approved plan at
-`~/.claude/plans/snuggly-sauteeing-puppy.md`. The plan describes *what* to
-build and *how*; this spec defines *done* in terms the implementation phase
-will be checked against.
+Successor to the original `lez-ecdsa` PoC. The ECDSA verifier built in
+that PoC is folded in as one row of a comparative benchmark across
+multiple signature schemes inside a real LEZ private transaction.
 
 ## 1. Objective
 
-Build a single-instruction SPeL `#[lez_program]` on the Logos Execution
-Zone that does **one** secp256k1 ECDSA `ecrecover` over a keccak256 hash,
-and **measure its cost** (cycle count, prove time, receipt size) inside
-the RISC Zero zkVM.
+Compare the cost of verifying common signature schemes inside a real
+LEZ private transaction, so a developer choosing a verification
+primitive for oracle / multi-sig / passkey workloads can predict
+cycles, prove time, receipt size, and end-to-end TX latency on
+consumer hardware.
 
-The PoC produces *data*, not a production component. The measurement is
-the deliverable: it gates downstream decisions about RedStone integration
-shape (push vs pull mode), multi-sig threshold cost, and proposed SPeL
-framework extensions.
+**Schemes in scope:**
 
-**Target reader of the output:** the project owner and any future
-contributor scoping RedStone-on-LEZ work. The bench output + a short
-results note are the primary artifacts a reader needs.
+- secp256k1 ECDSA (current baseline, carried over from lez-ecdsa)
+- secp256k1 Schnorr (BIP-340)
+- Ed25519
+- P-256 ECDSA
 
-## 2. Commands
+**Multiplicities:** N = 1 and N = 3 (3-of-5 RedStone-shaped, same
+message across all signers).
 
-After scaffolding (`logos-scaffold new lez-ecdsa --template lez-framework`)
-and the SPeL HEAD upgrade (see §3 below), these are the supported commands:
+**Deliverable:** a results table in README + a short "budget → scheme"
+decision note. Not a production component; this is *measurement*.
+
+**Target reader:** the project owner and any future contributor scoping
+RedStone / multi-sig / passkey verification on LEZ. The bench output +
+decision note are the primary artifacts.
+
+## 2. Tech Stack
+
+- LEZ v0.2.0-rc3 (`nssa`, `nssa_core`, `wallet`, `common`)
+- `risc0-zkvm` 3.0.5
+- Rust toolchain pinned to 1.92.0 via `rust-toolchain.toml`
+- Patched crypto (all RISC0-accelerated; verified in Phase 1 spike):
+  - `k256 v0.13.4-risczero.1` (`risc0/RustCrypto-elliptic-curves`) —
+    secp256k1 ECDSA **and** Schnorr. Schnorr's `verify_raw` calls
+    `ProjectivePoint::lincomb`, which on `target_os = "zkvm"` routes
+    to `risc0_bigint2::ec` — the same accelerated path ECDSA uses.
+  - `ed25519-dalek 2.1.1` from `risc0/curve25519-dalek` at tag
+    `curve25519-4.1.3-risczero.0`. The fork ships an explicit
+    `curve25519-dalek/src/backend/serial/risc0` backend; ed25519-dalek
+    depends on curve25519-dalek via path inside the workspace, so
+    verify benefits automatically.
+  - `p256 v0.13.2-risczero.1` (`risc0/RustCrypto-elliptic-curves`) —
+    NIST P-256 ECDSA, same fork as k256, same bigint2 acceleration.
+  - `tiny-keccak v2.0.2-risczero.0`, `sha2 v0.10.9-risczero.0`,
+    `crypto-bigint v0.5.5-risczero.0`
+
+## 3. Commands
 
 | Command | Purpose |
 |---|---|
-| `lgs build` | Build the workspace (guest + host). Must pass on every change. |
-| `cargo run --release --bin gen_test_vector` | Produce a deterministic synthetic test vector to `fixtures/test_vector.json` (gitignored). |
-| `cargo run --release --bin bench_verify` | Run the verifier under the RISC Zero prover; print cycles, prove time, receipt size. **Must be run with `RISC0_DEV_MODE=0`** to produce real numbers. |
-| `lgs prove` | If the CLI exposes equivalent metrics, prefer this over `bench_verify`. Decided at impl time. |
-| `cargo fmt --all --check` | Format check — runs in CI on every push/PR. |
-| `cargo clippy --workspace --all-targets -- -D warnings` | Lint — runs in CI on every push/PR. |
+| `cargo build --workspace --release` | Build host + all guest binaries. |
+| `cargo run --release --bin gen_test_vectors -- --scheme <s> --n <n>` | Produce a deterministic synthetic fixture for one (scheme, N) point. |
+| `cargo run --release --bin bench -- --scheme <s> --n <n> --account-id <id>` | Run a single bench point as a real private TX; print cycles, prove_time, receipt_size, tx_e2e. |
+| `cargo run --release --bin bench -- --all --account-id <id>` | Run the full matrix; write `results/results.json` and a Markdown table snippet. |
+| `cargo test --workspace` | Host-side fixture round-trip + executor-mode guest sanity per scheme. |
+| `cargo fmt --all --check` | Format check (CI). |
+| `cargo clippy --workspace --all-targets -- -D warnings` | Lint (CI). |
 
-## 3. Project structure
+All bench runs require `RISC0_DEV_MODE=0` and a reachable LEZ devnet
+(via `WalletCore::from_env()` — same config the original `run_private`
+used).
 
-Per the plan, plus one upgrade step:
+## 4. Project Structure
 
 ```
-lez-ecdsa/
-├── methods/guest/src/bin/lez_ecdsa.rs    # #[lez_program] + #[instruction]
-├── methods/guest/Cargo.toml              # [patch.crates-io] for risc0 k256/keccak
-├── lez_ecdsa_core/src/lib.rs             # VerifyInput / VerifyOutput
-├── examples/src/bin/gen_test_vector.rs   # host-side test vector generator
-├── examples/src/bin/bench_verify.rs      # cost harness
-├── fixtures/                             # gitignored — test vectors live here
-├── SPEC.md                               # this file
-├── README.md                             # results table goes here after first run
-└── .gitignore
+.
+├── methods/guest/src/bin/
+│   ├── ecdsa_secp256k1.rs       # one binary per scheme; N is data-driven
+│   ├── schnorr_secp256k1.rs
+│   ├── ed25519.rs
+│   ├── ecdsa_p256.rs
+│   └── noop.rs                  # NSSA wrap only — calibration baseline
+├── methods/guest/src/verifier/  # shared per-scheme verify modules
+│   └── {ecdsa_k256,schnorr_k256,ed25519,ecdsa_p256}.rs
+├── src/lib.rs                   # Scheme enum, VerifyInput, fixtures builder
+├── src/bin/
+│   ├── gen_test_vectors.rs
+│   └── bench.rs                 # generalized run_private; matrix runner
+├── fixtures/                    # gitignored
+├── results/                     # gitignored except results/README-snippet.md
+├── SPEC.md                      # this file
+├── PLAN.md                      # phase-2 task breakdown
+└── README.md                    # results table + decision note
 ```
 
-**SPeL upgrade after install (added requirement):** after the scaffold
-generates the workspace, replace the pinned `spel` / `spel_framework`
-crates.io dependency with a git dependency pointing at
-`https://github.com/logos-co/spel` `branch = "main"`. This is to track
-upstream during the PoC. Pin the resolved commit in `Cargo.lock` and
-record the SHA in the README results note so measurements stay
-reproducible.
+The original `run_private.rs` is folded into `bench.rs` and not
+preserved. Per-binary isolation gives clean receipt-size attribution
+per scheme; N=1 vs N=3 is data-driven (same ELF), differentiating
+through cycles and (downstream) receipt size via segment count.
 
-## 4. Code style
+## 5. Code Style
 
-- **Language:** Rust, edition matches whatever `lez-framework` template
-  pins. Do not bump edition.
-- **Formatting:** `cargo fmt` — run before every commit.
-- **Lints:** `cargo clippy --workspace -- -D warnings`. No `#[allow]`
-  pragmas without an inline `// reason: ...` comment.
-- **No comments unless they explain WHY** something non-obvious is
-  happening (per repo CLAUDE.md guidance). Don't narrate what the code
-  does.
-- **No new abstractions in the PoC.** One instruction, two structs, two
-  binaries. If a helper is tempting, inline it.
-- **Synthetic test data is deterministic.** Test-vector generator uses a
-  fixed seed; the same seed produces the same `(message, sig, address)`
-  on every run.
+Match the existing guest pattern. Each scheme binary is a thin shell:
 
-## 5. Testing strategy
+```rust
+// methods/guest/src/bin/schnorr_secp256k1.rs
+use lez_signature_bench_guest::verifier::schnorr_k256;
+use nssa_core::program::{
+    AccountPostState, ProgramInput, ProgramOutput, read_nssa_inputs,
+};
 
-1. **Sanity test (host):** `gen_test_vector` cross-checks the recovered
-   address against an independent reference (e.g. `cast wallet address`
-   over the same private key, or a second ECDSA library). If they
-   disagree, the vector is broken — abort.
-2. **Happy path (guest):** `bench_verify` runs the verifier on the
-   synthetic vector → expects `matches = true`, recovered address ==
-   expected address.
-3. **Negative path (guest):** flip one byte of `signature.r` in the
-   vector → expects either `matches = false` (with a different
-   recovered address) or an `InvalidInput` error from the verifier.
-   This proves the kernel isn't trivially passing.
-4. **CI** runs `cargo fmt --check` and `cargo clippy -D warnings` on
-   every push and PR. `cargo build --workspace` runs as a third job.
-   `lgs build` and `bench_verify` are NOT in CI yet — `lgs setup` is
-   too heavy for a free-tier runner; gating on them lands once we
-   know how `lgs` behaves. CI lives in `.github/workflows/ci.yml`.
+fn main() {
+    let (
+        ProgramInput { self_program_id, caller_program_id, pre_states, instruction },
+        instruction_data,
+    ) = read_nssa_inputs::<lez_signature_bench::VerifyInput>();
 
-Test vectors are **synthetic only** in this PoC. Captured RedStone
-signatures are deferred until the RedStone payload-parsing milestone
-(see §7).
+    schnorr_k256::verify_all(&instruction).expect("verify failed");
 
-## 6. Boundaries
+    let post_states = pre_states
+        .iter()
+        .map(|a| AccountPostState::new(a.account.clone()))
+        .collect();
+    ProgramOutput::new(
+        self_program_id, caller_program_id, instruction_data,
+        pre_states, post_states,
+    )
+    .write();
+}
+```
+
+Per-scheme verifier modules expose a single
+`verify_all(&VerifyInput) -> Result<(), Error>` so binaries stay 10–15
+lines. No comments on what the code does; one line max for *why* (e.g.
+why prehash variant chosen). No `#[allow]` without an inline reason.
+
+## 6. Testing Strategy
+
+1. **Host unit tests** (`cargo test`): for each scheme, the
+   `gen_test_vectors` builder produces inputs that the host-callable
+   `verify_all` accepts. Catches signing/encoding bugs without paying
+   for a prove.
+2. **Guest sanity** (executor mode, no STARK): one fixture per scheme
+   runs the guest to completion and writes the expected `ProgramOutput`.
+   Run as part of `cargo test --workspace`.
+3. **Negative path** (host): per scheme, flip one byte of a signature
+   and confirm `verify_all` returns `Err`. Proves the verifier isn't
+   trivially passing.
+4. **End-to-end bench** is the integration test: if a scheme can't
+   complete a real private TX, that's the failure signal. Not gated in
+   CI (needs devnet credentials).
+5. **CI** runs `fmt + clippy + build` on every push and PR. Bench runs
+   stay local.
+
+No coverage target — this is a research bench, not a service.
+
+## 7. Boundaries
 
 ### Always
-- **Run `lgs build` and `bench_verify` (with `RISC0_DEV_MODE=0`) before
-  claiming any task is done.** No green checkmarks on partial work.
-- Surface assumptions explicitly when picking SPeL macro syntax,
-  `risc0_zkvm` patch tags, or `lgs` CLI flag names — those are the
-  three points the plan flagged as needing first-touch confirmation.
-- When `RISC0_DEV_MODE=1` is used (e.g. for a fast smoke run), the
-  bench output and any commit message referencing numbers must say so
-  prominently. Dev-mode numbers are not real measurements.
+
+- Keep the AI-generated / not-for-mainnet warning at the top of
+  `README.md`. This codebase is a research bench, not an audited
+  primitive; the warning must be the first thing a reader sees.
+- NSSA-wrap every guest; bench numbers reflect real LEZ cost.
+- Use RISC0 patched crypto for every scheme; flag any that fall back
+  to soft crypto and exclude from the headline comparison.
+- Measure cycles + prove time + receipt size + end-to-end TX wall time
+  for every (scheme, N) point.
+- Use deterministic fixtures (fixed seeds) so numbers reproduce.
+- Same message across all N signers (matches the oracle/RedStone shape).
+- When `RISC0_DEV_MODE=1` is used for a smoke run, output and any
+  commit message referencing numbers must say so prominently. Dev-mode
+  numbers are not real measurements.
 
 ### Ask first
-- Any command that mutates shared state: `lgs deploy`, `git push`,
-  `gh repo create`, publishing, Cargo `cargo publish`, etc. The
-  initial `git init` + first push to `fryorcraken/lez-ecdsa` is
-  authorized; subsequent pushes after the initial one are not
-  pre-authorized.
-- Bumping the `risc0_zkvm` major version, or bumping the SPeL git
-  dependency to a different branch / fork.
+
+- GitHub repo rename (`lez-ecdsa` → `lez-signature-bench`) — visible to
+  others, breaks links.
+- New crate dependencies beyond the four patched crypto crates.
+- Toolchain bump (currently 1.92.0).
+- Bumping `risc0-zkvm` major version.
+- Changes to LEZ devnet config.
+- Any push, deploy, or `gh repo *` command after the rename.
 
 ### Never
-- Commit raw private keys, signing secrets, mnemonic seeds, or
-  unredacted production RedStone signer keys. Test signing keys
-  must be either deterministic-from-seed in source (so the seed is
-  the only "secret" and it's a constant) or loaded from a gitignored
-  `fixtures/` directory.
-- Bypass git hooks (`--no-verify`) or git signing flags
-  (`--no-gpg-sign`, `-c commit.gpgsign=false`) without explicit user
-  approval. If a hook fails, fix the cause.
+
+- Replace patched crypto with pure-Rust crates — distorts the
+  comparison.
+- Commit fixtures, results JSON, devnet credentials, mnemonic seeds,
+  or `.env` files.
+- Remove the no-op baseline — it's the calibration anchor for NSSA
+  overhead.
+- Use threshold cryptography or batch verification in the headline
+  matrix (note as future work; if measured, add as separate rows).
+- Bypass git hooks (`--no-verify`) or signing flags
+  (`--no-gpg-sign`) without explicit user approval.
 - Silently use `RISC0_DEV_MODE=1` for any output reported as a
   measurement.
-- Refactor or "clean up" code outside the PoC's narrow surface area.
+- Refactor code outside the bench's surface area.
 
-## 7. Non-goals (deferred, explicit)
+## 8. Success Criteria
 
-The plan's "Not doing" list is canonical; restating here so a reader of
-the spec alone sees the boundary:
+The bench is complete when **all** of these are demonstrably true:
 
-- **RedStone payload parsing.** Synthetic test vectors only.
-- **Multi-sig threshold (M-of-N).** Exactly one ECDSA verify.
-- **Push mode** (write to PDA). Instruction returns a value, doesn't
-  mutate accounts.
-- **Pull mode** (output for tail call). The output struct exists, no
-  tail-call wiring.
-- **SPeL framework extensions** for push/pull attributes.
-- **Deployment** (`lgs deploy`). Local proving only.
-- **`lgs build` / `bench_verify` in CI.** Lint and `cargo build` only;
-  proving stays local.
-- **Cost target / pass-fail threshold.** This PoC measures and reports;
-  acceptability is decided in a follow-up after the numbers exist.
+- [ ] **Patch availability validated** for all 4 schemes before any
+      guest is written. Missing patches are flagged in the spec and the
+      affected scheme is either dropped or marked "soft" in results.
+- [ ] **All in-scope schemes complete a real private TX on LEZ** for
+      both N=1 and N=3 (up to 8 measurement points + 1 noop baseline).
+- [ ] **Host unit tests pass** for every in-scope scheme: positive
+      round-trip + negative (one-byte flip → `Err`).
+- [ ] **README results table** with columns: `scheme | N | cycles |
+      prove_time | receipt_size | tx_e2e | notes`. Machine identified
+      (CPU, RAM, OS, RISC0 version, LEZ version).
+- [ ] **Decision note** in README answering: "given a 5s / 30s / 5min
+      end-to-end TX budget on this machine, which (scheme, N) fits?"
+- [ ] **Reproducibility**: a fresh checkout + `bench --all` reproduces
+      the table within ±10% on the same machine.
+- [ ] **CI** (`fmt + clippy + build`) green on the default branch.
+- [ ] No secrets, fixtures, or results JSON committed.
 
-## 8. Acceptance criteria (testable "done")
+## 9. Non-goals (deferred, explicit)
 
-The PoC is complete when **all** of these are demonstrably true:
+- **RedStone payload parsing.** Synthetic fixtures only.
+- **Threshold cryptography** (Schnorr/Ed25519/BLS threshold sigs).
+- **Batch verification.** Schnorr and Ed25519 support it; out of the
+  headline matrix. Optional follow-up if 3-of-5 numbers warrant.
+- **N > 3 or N-sweep.** Only the winning scheme might get a sweep, and
+  only if the budget framing demands it.
+- **BLS, RSA, Lamport, SPHINCS+, post-quantum schemes.** Out of scope.
+- **Multi-machine numbers.** Single machine only; cycles generalize,
+  prove-time doesn't.
+- **Production deployment** of any scheme. Measurement only.
+- **Cost target / pass-fail threshold.** Bench measures; acceptability
+  is decided in a follow-up after the numbers exist.
 
-- [ ] `lgs build` succeeds from a clean checkout.
-- [ ] `cargo run --release --bin gen_test_vector` produces a vector
-      whose recovered address matches an independent reference
-      (`cast wallet address` or equivalent).
-- [ ] `cargo run --release --bin bench_verify` with `RISC0_DEV_MODE=0`
-      prints `matches = true` and emits three numbers: total cycles,
-      wall-clock prove time, receipt size in bytes.
-- [ ] Flipping one byte of the signature in the test vector flips the
-      result to `matches = false` (or `InvalidInput`).
-- [ ] `README.md` contains a results table with: cycles, prove time
-      (mean of 5 runs, machine spec noted), receipt size, the
-      `risc0_zkvm` version, and the pinned SPeL commit SHA.
-- [ ] No private keys or secrets are committed; `fixtures/` is in
-      `.gitignore`.
-- [ ] The repo lives at `github.com/fryorcraken/lez-ecdsa` with at
-      least the SPEC and a runnable scaffold pushed.
-- [ ] `.github/workflows/ci.yml` exists and the fmt + clippy + build
-      jobs are green on the default branch.
+## 10. Open Questions
 
-## 9. Reference URLs
+**Resolved by Phase 1 spike:**
 
-See the plan file for the full link list. Key ones:
+- ~~Does k256's `schnorr` submodule hit the RISC0 secp256k1 precompile?~~
+  **Yes.** `schnorr::verifying::verify_raw` calls
+  `ProjectivePoint::lincomb`, which on `target_os = "zkvm"` dispatches
+  to `risc0_bigint2::ec` — the same accelerated path ECDSA uses.
+  Source: `k256/src/arithmetic/mul.rs` lines 343–377 at tag
+  `k256/v0.13.4-risczero.1`.
+- ~~Latest stable RISC0 fork tag for `curve25519-dalek` and `p256`?~~
+  **`curve25519-4.1.3-risczero.0`** (workspace ships ed25519-dalek
+  2.1.1 with a `backend/serial/risc0` module) and
+  **`p256/v0.13.2-risczero.1`** (same fork as k256).
 
-- logos-scaffold: https://github.com/logos-co/logos-scaffold
-- spel: https://github.com/logos-co/spel (track `main` branch during PoC)
+**Still open:**
+
+- Cycle counts: read from receipt metadata after prove, or do a
+  separate executor pass? Prefer the former (one pass per measurement).
+- Should the no-op baseline run with N=1 input, or also N=3 for parity?
+  *(N=1 is the cleaner "pure NSSA cost" reference.)*
+
+## 11. Reference URLs
+
 - LEZ: https://github.com/logos-blockchain/logos-execution-zone
-- RISC Zero ECDSA example: https://github.com/risc0/risc0/tree/main/examples/ecdsa
 - RISC Zero precompiles: https://dev.risczero.com/api/zkvm/precompiles
+- RISC Zero RustCrypto forks: https://github.com/risc0/RustCrypto-elliptic-curves
+- BIP-340 Schnorr: https://github.com/bitcoin/bips/blob/master/bip-0340.mediawiki
+- Ed25519 (RFC 8032): https://datatracker.ietf.org/doc/html/rfc8032
+- Predecessor PoC numbers: see git history at `131d89d` (Pass 2 NSSA wrap).

@@ -1,244 +1,237 @@
-# lez-ecdsa
+# lez-signature-bench
 
-A proof-of-concept guest program for the
-[Logos Execution Zone (LEZ)](https://github.com/logos-blockchain/logos-execution-zone)
-that performs **secp256k1 ECDSA signature verification over keccak256
-hashes** inside the [RISC Zero zkVM](https://risczero.com/) — the cryptographic
-kernel needed to verify [RedStone oracle](https://docs.redstone.finance/) data
-in pull mode.
+> ⚠️ **AI-generated codebase — research bench only.** This repository
+> was produced with AI assistance to get a rough indication of
+> signature-verification cost on RISC Zero / LEZ. It has not been
+> audited. **It MUST NOT be used in any mainnet program** or any
+> production system. Use it for measurement, comparison, and
+> intuition-building — nothing else.
 
-The current goal is **measurement, not deployment**: how many cycles, how much
-prove time, how big a receipt for one `ecrecover` over `keccak256(message)`?
-Those numbers gate every downstream decision (multi-sig threshold cost, push
-vs pull mode shape, eventual framework wrapping).
+A comparative benchmark of common signature-verification schemes
+inside the [Logos Execution Zone (LEZ)](https://github.com/logos-blockchain/logos-execution-zone)
+guest model on the [RISC Zero zkVM](https://risczero.com/). Each scheme
+runs inside an NSSA-wrapped guest using RISC Zero's accelerated curve
+arithmetic, and is benchmarked end-to-end through the local prover.
+
+The goal is *data*, not deployment: cycles, prove time, and receipt
+size for each scheme so a developer choosing a verification primitive
+for oracle / multi-sig / passkey workloads on LEZ can predict cost
+on consumer hardware.
 
 See [`SPEC.md`](./SPEC.md) for acceptance criteria and
 [`PLAN.md`](./PLAN.md) for the task breakdown.
 
-## Status
+## Schemes in scope
 
-Bare LEZ guest, no `spel-framework` / `lez-framework` wrapper. The original
-plan was to use [`logos-co/spel`](https://github.com/logos-co/spel) for
-Anchor-style ergonomics, but its dep tree pulls
-`bonsai-sdk → reqwest → rustls → ring` into the `riscv32` guest target, where
-`ring`'s build script can't cross-compile (see upstream issue
-[logos-co/spel#165](https://github.com/logos-co/spel/issues/165)). Once that
-lands, the verifier kernel here can be wrapped in `#[lez_program]` /
-`#[instruction]` macros without changing the cryptographic core.
+| Scheme | Curve | Prehash | RISC0 patch source |
+|---|---|---|---|
+| ECDSA secp256k1 | secp256k1 | keccak256 | `k256/v0.13.4-risczero.1` |
+| Schnorr secp256k1 (BIP-340) | secp256k1 | sha256 | (same fork as ECDSA) |
+| Ed25519 | Curve25519 | none (sha512 internal) | `curve25519-4.1.3-risczero.0` |
+| ECDSA P-256 | NIST P-256 | sha256 | `p256/v0.13.2-risczero.1` |
 
-| Component | Version |
+All four schemes hit RISC Zero's `bigint2` / curve precompile path —
+verified in the Phase 1 spike. Schnorr secp256k1 routes through the
+same `ProjectivePoint::lincomb` accelerated path that ECDSA secp256k1
+uses (no separate code path); Ed25519 uses curve25519-dalek's
+`backend/serial/risc0` module.
+
+## Results
+
+Real-prove run, single-pass per cell on an idle machine. NSSA-wrapped
+guests, `RISC0_DEV_MODE=0`, one synthetic same-message fixture per
+`(scheme, N)`.
+
+**Machine:** AMD Ryzen 9 7940HS (16 threads, AMD Radeon 780M iGPU,
+60 GiB RAM), Linux 6.19, CPU prover (no CUDA, no Bonsai).
+**Stack:** risc0-zkvm 3.0.5, LEZ v0.2.0-rc3, Rust 1.92.0.
+
+| scheme | N | total cycles | user cycles | segments | prove time (s) | receipt size (B) |
+|---|---:|---:|---:|---:|---:|---:|
+| `noop` | 1 | 131 072 | 52 705 | 1 | 23.15 | 245 306 |
+| `ecdsa-secp256k1` | 1 | 524 288 | 372 875 | 1 | 141.47 | 492 375 |
+| `ecdsa-secp256k1` | 3 | 1 310 720 | 1 072 214 | 2 | 260.13 | 763 049 |
+| `schnorr-secp256k1` | 1 | 524 288 | 342 849 | 1 | 77.82 | 269 234 |
+| `schnorr-secp256k1` | 3 | 1 114 112 | 998 530 | 2 | 166.46 | 505 140 |
+| `ed25519` | 1 | 1 048 576 | 918 700 | 1 | 153.97 | 282 482 |
+| `ed25519` | 3 | 3 145 728 | 2 726 208 | 3 | 451.82 | 846 678 |
+| `ecdsa-p256` | 1 | 524 288 | 270 305 | 1 | 71.44 | 269 242 |
+| `ecdsa-p256` | 3 | 1 048 576 | 770 910 | 1 | 141.36 | 284 074 |
+
+The `noop` row is the NSSA-wrap-only calibration baseline (52 705 user
+cycles with empty pre-states, no crypto). Subtract it from any other
+row for the per-scheme verify cost in cycles. Note `ecdsa-secp256k1`
+shows a much larger receipt than other schemes at N=1; this is driven
+by the segment-padding power-of-two and may also reflect the ELF that
+keccak256 + k256 path pulls in. Re-runs may vary ±10% on prove time.
+
+### Per-signature cycle deltas (subtracting noop)
+
+| scheme | user cycles / sig (N=1) | user cycles / sig (≈ from N=3) |
+|---|---:|---:|
+| ecdsa-secp256k1 | 320 170 | 339 836 |
+| schnorr-secp256k1 | 290 144 | 315 275 |
+| ecdsa-p256       | 217 600 | 239 401 |
+| ed25519          | 865 995 | 891 168 |
+
+**Headline takes:**
+
+- **P-256 ECDSA is the cheapest** verify on this stack — about
+  **32% fewer cycles per sig than secp256k1 ECDSA** at N=1. The same
+  RISC0 `bigint2` curve precompile applies and the field is similar
+  cost; what differs is keccak256 (k256 path) vs sha256 (p256 path)
+  for the message digest.
+- **Schnorr secp256k1 ≈ 9% cheaper than ECDSA secp256k1** per sig.
+  The expected win from skipping the modular inversion is partially
+  offset by Schnorr's `ProjectivePoint::lincomb(G, s, P, -e)` doing
+  one combined mul vs ECDSA's separate mul + recovery. Same precompile
+  path, smaller win than naive theory predicts.
+- **Ed25519 is by far the most expensive** here — **2.7× the user
+  cycles** of secp256k1 ECDSA. The RISC0 curve25519-dalek backend is
+  available and active, but Edwards arithmetic plus the in-algorithm
+  sha512 (no zkVM precompile) dominates.
+- **Multi-sig scaling is roughly linear** for all schemes — about
+  **+320–340K user cycles per added secp256k1 sig**, **+870K** per
+  Ed25519 sig. No batch-verify shortcuts here (out of scope per
+  [`SPEC.md`](./SPEC.md) §9).
+
+### Decision note: budget → scheme on this laptop
+
+Given the prove times above on a CPU-only Ryzen 9 7940HS:
+
+| TX prove budget | What fits |
 |---|---|
-| LEZ (`nssa`, `nssa_core`, `wallet`, `common`) | `v0.2.0-rc3` |
-| `risc0-zkvm` | `3.0.5` |
-| Patched crypto | `k256 v0.13.4-risczero.1`, `tiny-keccak v2.0.2-risczero.0`, `sha2 v0.10.9-risczero.0`, `crypto-bigint v0.5.5-risczero.0` |
-| Rust toolchain | pinned via `rust-toolchain.toml` (`1.92.0`) |
+| **30 s** | only the `noop` baseline (no crypto) |
+| **60 s** | nothing in scope |
+| **90 s** | `ecdsa-p256` n=1 (71 s); `schnorr-secp256k1` n=1 (78 s) |
+| **3 min** | adds `ecdsa-secp256k1` n=1 (141 s), `ecdsa-p256` n=3 (141 s), `ed25519` n=1 (154 s) |
+| **5 min** | adds `schnorr-secp256k1` n=3 (166 s), `ecdsa-secp256k1` n=3 (260 s) |
+| **8 min** | adds `ed25519` n=3 (452 s) |
 
-## Layout
+For interactive RedStone-style oracle UX (3-of-N pulls, sub-30 s),
+**no scheme fits on CPU**. CUDA / Bonsai would compress this
+dramatically; CPU alone is too heavy for low-latency UX.
 
-```
-.
-├── methods/
-│   ├── Cargo.toml                       # risc0-build harness for the guest
-│   ├── build.rs                         # calls risc0_build::embed_methods()
-│   └── guest/
-│       ├── Cargo.toml                   # guest deps (risc0-zkvm, k256, tiny-keccak)
-│       └── src/bin/lez_ecdsa.rs         # the verifier guest binary
-├── src/
-│   ├── lib.rs                           # shared VerifyInput type + test-vector builder
-│   └── bin/run_private.rs               # host: submit privacy-preserving TX, time end-to-end
-├── Cargo.toml                           # workspace + [patch.crates-io] for risc0 forks
-├── rust-toolchain.toml                  # pins toolchain
-├── scaffold.toml                        # logos-scaffold metadata (not required for cargo build)
-├── .github/workflows/ci.yml             # fmt + clippy + build CI
-├── SPEC.md                              # acceptance criteria, boundaries, non-goals
-├── PLAN.md                              # task breakdown
-└── README.md                            # this file
-```
+For batch / async workloads (sub-5 min acceptable), **secp256k1 Schnorr
+or P-256 at N=3** is the budget pick. If keys / addresses must stay
+secp256k1 (Ethereum compat), Schnorr is the natural step up from ECDSA.
 
-## Prerequisites
+## Methodology
 
-- Rust toolchain (the project pins `1.92.0` via `rust-toolchain.toml`; rustup
-  picks it up automatically).
-- The RISC Zero RISC-V guest toolchain. Install via
-  [`rzup`](https://dev.risczero.com/api/zkvm/install):
-  ```bash
-  curl -L https://risczero.com/install | bash
-  rzup install
-  ```
-  This puts `riscv32-unknown-elf-gcc` and the `riscv32im-risc0-zkvm-elf`
-  Rust target into `~/.risc0/`.
-- (Optional) [`logos-scaffold`](https://github.com/logos-co/logos-scaffold)
-  if you want to deploy via `lgs deploy` later. Not needed for the local
-  PoC.
+Each row is one **real prove pass** through `risc0_zkvm::default_prover()`
+with `RISC0_DEV_MODE=0`, against the NSSA-wrapped guest binary for that
+scheme. Inputs are written in the exact shape `nssa_core::read_nssa_inputs`
+expects (`self_program_id`, `caller_program_id`, `pre_states`, NSSA-encoded
+instruction). Cycles and segment count come from `ProveInfo.stats`;
+prove time is wall-clock around the `prove(...)` call; receipt size is
+`bincode::serialize(&receipt).len()`.
+
+The bench does **not** submit through a real LEZ private TX — that
+requires a running devnet account and is the next milestone. See
+SPEC §1 for what end-to-end coverage adds (sequencer roundtrip,
+privacy-preserving wrapping). The numbers above isolate the **inner
+proving cost**, which is what changes between schemes.
+
+Synthetic fixtures only — no captured oracle payloads. All signers
+share the same message (`b"hello redstone"`) per row, signed with
+deterministic seeds.
 
 ## Build
 
 ```bash
-cargo build --workspace
+cargo build --workspace --release
 ```
 
-This compiles the host CLI (`bench_verify`) and, via `risc0-build`, the
-RISC-V guest binary embedded as `LEZ_ECDSA_ELF`.
+`risc0-build` cross-compiles five guest ELFs (one per scheme + the
+noop baseline) for `riscv32im-risc0-zkvm-elf` and embeds them as
+`{ECDSA_SECP256K1,SCHNORR_SECP256K1,ED25519,ECDSA_P256,NOOP}_ELF`.
 
-## Run the bench yourself
+## Run the bench
 
 ```bash
-RISC0_DEV_MODE=0 cargo run --release --bin bench_verify
+# One scheme + N
+RISC0_DEV_MODE=0 cargo run --release --bin bench -- \
+  --scheme ecdsa-secp256k1 --n 1
+
+# Full matrix → results/results.json + results/README-snippet.md
+RISC0_DEV_MODE=0 cargo run --release --bin bench -- --all
+
+# Generate just the JSON fixture for one (scheme, N) point
+cargo run --release --bin gen_test_vectors -- \
+  --scheme schnorr-secp256k1 --n 3
 ```
 
-What it does:
+`RISC0_DEV_MODE=1` skips actual proving and prints fake numbers.
+The bench logs a warning when this is set; never quote those numbers.
 
-1. Generates a deterministic secp256k1 keypair from a hardcoded 32-byte seed.
-2. Signs the message `b"hello redstone"` (keccak256-hashed) with that key.
-3. Hands `(message, signature, expected_signer_address)` to the guest.
-4. Inside the guest, `ecrecover` reconstructs the signing pubkey, derives
-   the Ethereum-style 20-byte address (`keccak256(pubkey)[12..]`), and commits
-   `(recovered_address, matches_bool)` to the receipt journal.
-5. The host decodes the journal, prints `total_cycles`, `user_cycles`,
-   `prove_time`, and `receipt_size`, and exits 0 iff `matches == true`.
-
-`RISC0_DEV_MODE=1` skips actual proving and produces fake numbers — the
-bench refuses to run in that mode (exits 1 with a `WARN` line).
-
-Expected output shape:
-
-```
-expected_signer = 0x7402fee841da96a1fc4056d778bbfa1dea509ba9
----
-matches      = true
-recovered    = 0x7402fee841da96a1fc4056d778bbfa1dea509ba9
-total_cycles = <N>
-user_cycles  = <M>
-prove_time   = <duration>
-receipt_size = <bytes>
-```
-
-### Tweak the bench
-
-The synthetic vector lives in `make_test_vector()` in
-`src/bin/bench_verify.rs`. Change the seed (`sk_bytes`) or the message to
-test other inputs. Flipping a single byte of `signature.r` is a quick way
-to confirm the verifier doesn't trivially pass — the bench will print
-`matches = false` (or panic with `ecrecover failed` if the signature
-doesn't decode at all).
-
-## Verify against an independent reference
-
-The recovered address printed above can be cross-checked against any
-independent secp256k1 library. With [`foundry`](https://getfoundry.sh):
-
-```bash
-# The seed used in make_test_vector(), as a hex private key:
-cast wallet address \
-  0x4c0ac86f124da091c73eb855296efb1000c44d68a9a36e2d83b15577916eabcd
-# Should print 0x7402fee841da96a1fc4056d778bbfa1dea509ba9
-```
-
-If the addresses match, the entire chain (key derivation, hashing,
-signing, verifying, recovering) is consistent.
+The matrix run on the reference machine takes **~28 minutes** end-to-end.
 
 ## Lint and test
 
 ```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo test --workspace      # 9 host tests: byte-stable wire format,
+                            # positive + negative round-trip per scheme
 ```
 
-CI (`.github/workflows/ci.yml`) runs the same three commands plus a
-debug `cargo build --workspace` on every push and PR.
+CI (`.github/workflows/ci.yml`) runs the fmt + clippy + build set on
+every push and PR. Bench runs are local only.
 
-## Results
+## Prerequisites
 
-End-to-end runs on commodity hardware. Single-run numbers per cell;
-mean ± stddev over 5 runs is a follow-up. Machine: **AMD Ryzen 9 7940HS,
-16 threads, 60 GiB RAM, CPU prove (no CUDA, no Bonsai)**. Stack:
-risc0-zkvm 3.0.5, LEZ v0.2.0-rc3, patched k256/tiny-keccak/sha2/crypto-bigint.
+- Rust toolchain 1.92.0 (auto-picked via `rust-toolchain.toml`).
+- The RISC Zero RISC-V guest toolchain. Install via
+  [`rzup`](https://dev.risczero.com/api/zkvm/install):
+  ```bash
+  curl -L https://risczero.com/install | bash
+  rzup install
+  ```
+- ~30 minutes of idle CPU time for a full matrix run.
 
-| Variant | N | user cycles | total cycles | prove time | receipt size |
-|---|---:|---:|---:|---:|---:|
-| `recover_from_prehash` (v1) | 1 | 639,802 | 1,048,576 | 253.8 s (~4 min 14 s) | 493 KiB |
-| `recover_from_prehash` (v1) | 3 | 1,881,476 | 2,097,152 | 381.5 s (~6 min 22 s) | 768 KiB |
-| `verify_prehash` (v2, current) | 1 | **341,111** | 524,288 | **130.3 s (~2 min 10 s)** | 480 KiB |
-| `verify_prehash` (v2, current) | 3 | **993,219** | 1,114,112 | **225.1 s (~3 min 45 s)** | 709 KiB |
+## Layout
 
-**Optimization that landed (v1 → v2):** swap `VerifyingKey::recover_from_prehash`
-for `verify_prehash` against a known pubkey. This drops the "find which
-pubkey matches this `r`" step entirely. For RedStone-style consumers
-(allowlist of known signers, identified by pubkey) this is the natural
-shape — recovery semantics are only needed when the signer is unknown.
-
-The trade-off: input is `pubkey: Vec<u8>` (33-byte SEC1-compressed) per
-signer instead of `expected_signer: [u8; 20]` (Ethereum address). On-chain
-storage of the allowlist is +13 B/signer.
-
-Per-signature kernel cost (verify variant):
-
-- ~331K user cycles per ECDSA verify (linear with N).
-- 1 sig fits in a single 2¹⁹-cycle segment.
-- 3 sigs straddles 2 segments (one full 2²⁰, one tiny ~65K).
-
-Headline take: **~47% fewer cycles, ~45% less prove time, ~5–8% smaller
-receipt** vs the recover-based first cut. Single-sig kernel is now
-~2 min 10 s CPU prove; 3-sig is ~3 min 45 s CPU prove.
-
-### End-to-end private-TX time (Pass 2)
-
-The numbers above are the bare cryptographic kernel under `risc0_zkvm`'s
-`default_prover()`. The number a user actually feels — "click submit on a
-privacy-preserving transaction → confirmation back from the sequencer" —
-adds NSSA framing, the privacy-preserving circuit (which proves the
-account-state transition on top of our verifier), and the sequencer
-roundtrip. Measured against a local `lgs localnet` against a fresh
-PrivateOwned account:
-
-| N signers | Bare kernel | Full private TX | PP wrapping overhead |
-|---:|---:|---:|---:|
-| 1 | 130.3 s (~2 min 10 s) | **212.7 s (~3 min 33 s)** | +82.4 s (+63%) |
-| 3 | 225.1 s (~3 min 45 s) | **387.9 s (~6 min 28 s)** | +162.8 s (+72%) |
-
-The privacy-preserving wrapping is not a fixed overhead — it scales
-roughly with the kernel cycle count (the privacy circuit re-proves
-account-state transitions over the verifier's commitments). Net: a
-RedStone-shaped 3-of-N pull on a laptop CPU is **~6½ minutes** of user
-wait. CUDA / Bonsai would compress this dramatically; CPU alone is too
-heavy for interactive UX.
-
-To reproduce the end-to-end private-TX time:
-
-```bash
-# 1. Start localnet (one-time per session)
-lgs localnet start
-
-# 2. Deploy the program (one-time per code change)
-lgs deploy
-
-# 3. Create a fresh PrivateOwned account if you don't have one
-NSSA_WALLET_HOME_DIR="$PWD/.scaffold/wallet" \
-  ~/.cache/logos-scaffold/repos/lez/<sha>/target/release/wallet \
-  account new private
-
-# 4. Run the timed submission
-NSSA_WALLET_HOME_DIR="$PWD/.scaffold/wallet" RISC0_DEV_MODE=0 \
-  cargo run --release --bin run_private -- \
-  --account-id Private/<your-fresh-account-id> --num-signers 3
 ```
-
-_Note: the bare-kernel `bench_verify` binary was retired when the guest
-was rewrapped in NSSA shape for Pass 2 — those rows above were captured
-against an earlier risc0-direct-prover variant (commit `61cc0d6`)._
+.
+├── methods/
+│   ├── build.rs                          # risc0_build::embed_methods()
+│   └── guest/
+│       ├── src/lib.rs                    # shared VerifyInput + per-scheme verifier modules
+│       └── src/bin/
+│           ├── ecdsa_secp256k1.rs        # NSSA-wrapped guest, one per scheme
+│           ├── schnorr_secp256k1.rs
+│           ├── ed25519.rs
+│           ├── ecdsa_p256.rs
+│           └── noop.rs                   # NSSA-wrap-only calibration
+├── src/
+│   ├── lib.rs                            # Scheme enum + host-side fixtures + verify_all
+│   ├── verifier/                         # host-callable verify per scheme (mirrors guest)
+│   └── bin/
+│       ├── bench.rs                      # local-prove bench (single + --all)
+│       └── gen_test_vectors.rs           # write JSON fixture for one (scheme, N)
+├── Cargo.toml                            # workspace + [patch.crates-io] for risc0 crypto forks
+├── results/                              # gitignored — matrix output lives here
+├── fixtures/                             # gitignored
+├── SPEC.md                               # acceptance criteria + boundaries
+├── PLAN.md                               # 5-phase task breakdown
+└── README.md                             # this file
+```
 
 ## Roadmap
 
-This PoC ships only the cryptographic kernel. Deliberately deferred (see
-[`SPEC.md`](./SPEC.md) §7):
+Deliberately deferred (see [`SPEC.md`](./SPEC.md) §9):
 
-- RedStone payload parsing — synthetic test vector only for now.
-- Multi-sig threshold (M-of-N) — exactly one ECDSA verify here.
-- Push mode (write to PDA) and pull mode (output for tail call) — once
-  cost is acceptable, both modes get wired up.
-- SPeL framework wrapping — pending [logos-co/spel#165](https://github.com/logos-co/spel/issues/165).
-- Deployment via `lgs deploy` — local proving only.
+- **End-to-end private-TX timing on a real LEZ devnet.** The bench
+  currently isolates inner proving cost; the full-TX path adds NSSA
+  framing, privacy-preserving circuit, and sequencer roundtrip — a
+  ~60–70% multiplier in earlier passes. Reproducible once a devnet
+  account_id is available; no scheme switch is needed.
+- **Threshold cryptography** (Schnorr / Ed25519 / BLS threshold sigs).
+- **Batch verification** for Schnorr and Ed25519 — could collapse
+  3-of-N cost meaningfully; out of the headline matrix.
+- **N-sweep** beyond {1, 3} for the winning scheme.
+- **Multi-machine numbers.** Cycles generalize; prove time doesn't.
+- **RedStone payload parsing.**
 
 ## License
 

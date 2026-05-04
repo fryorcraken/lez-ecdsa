@@ -1287,14 +1287,15 @@ dependencies = [
 [[package]]
 name = "curve25519-dalek"
 version = "4.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97fb8b7c4503de7d6ae7b42ab72a5a59857b4c937ec27a3d4539dba95b5ab2be"
+source = "git+https://github.com/risc0/curve25519-dalek?tag=curve25519-4.1.3-risczero.0#385adda1fa3b66d9aaa8b8fcc99ddc324d33ba32"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",
+ "crypto-bigint",
  "curve25519-dalek-derive",
  "digest",
  "fiat-crypto",
+ "hex",
  "rustc_version",
  "serde",
  "subtle",
@@ -1304,8 +1305,7 @@ dependencies = [
 [[package]]
 name = "curve25519-dalek-derive"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f46882e17999c6cc590af592290432be3bce0428cb0d5f8b6715e4dc7b383eb3"
+source = "git+https://github.com/risc0/curve25519-dalek?tag=curve25519-4.1.3-risczero.0#385adda1fa3b66d9aaa8b8fcc99ddc324d33ba32"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1586,15 +1586,15 @@ version = "2.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "115531babc129696a58c64a4fef0a8bf9e9698629fb97e9e40767d235cfbcd53"
 dependencies = [
+ "pkcs8",
  "serde",
  "signature",
 ]
 
 [[package]]
 name = "ed25519-dalek"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70e796c081cee67dc755e1a36a0a172b897fab85fc3f6bc48307991f64e4eca9"
+version = "2.1.1"
+source = "git+https://github.com/risc0/curve25519-dalek?tag=curve25519-4.1.3-risczero.0#385adda1fa3b66d9aaa8b8fcc99ddc324d33ba32"
 dependencies = [
  "curve25519-dalek",
  "ed25519",
@@ -2891,40 +2891,47 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
-name = "lez-ecdsa"
+name = "lez-signature-bench"
 version = "0.1.0"
 dependencies = [
  "bincode",
  "clap",
  "common",
+ "ed25519-dalek",
  "hex",
  "k256",
- "lez_ecdsa_methods",
+ "lez_signature_bench_methods",
  "nssa",
  "nssa_core",
+ "p256",
  "risc0-zkvm",
  "sequencer_service_rpc",
  "serde",
+ "serde_json",
+ "sha2",
  "tiny-keccak",
  "tokio",
  "wallet",
 ]
 
 [[package]]
-name = "lez_ecdsa_methods"
+name = "lez_signature_bench_methods"
 version = "0.1.0"
 dependencies = [
  "risc0-build",
 ]
 
 [[package]]
-name = "lez_ecdsa_programs"
+name = "lez_signature_bench_programs"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
  "k256",
  "nssa_core",
+ "p256",
  "risc0-zkvm",
  "serde",
+ "sha2",
  "tiny-keccak",
 ]
 
@@ -4001,6 +4008,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "p256"
+version = "0.13.2"
+source = "git+https://github.com/risc0/RustCrypto-elliptic-curves?tag=p256%2Fv0.13.2-risczero.1#bb0f51ad3ba81585f36ea8a1ea81093d8664b195"
+dependencies = [
+ "bytemuck",
+ "ecdsa",
+ "elliptic-curve",
+ "primeorder",
+ "risc0-bigint2",
+ "sha2",
+]
+
+[[package]]
 name = "parking_lot"
 version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4162,6 +4182,16 @@ checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
 dependencies = [
  "proc-macro2",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "primeorder"
+version = "0.13.1"
+source = "git+https://github.com/risc0/RustCrypto-elliptic-curves?tag=p256%2Fv0.13.2-risczero.1#bb0f51ad3ba81585f36ea8a1ea81093d8664b195"
+dependencies = [
+ "bytemuck",
+ "elliptic-curve",
+ "risc0-bigint2",
 ]
 
 [[package]]
