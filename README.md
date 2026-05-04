@@ -46,17 +46,17 @@ guests, `RISC0_DEV_MODE=0`, one synthetic same-message fixture per
 60 GiB RAM), Linux 6.19, CPU prover (no CUDA, no Bonsai).
 **Stack:** risc0-zkvm 3.0.5, LEZ v0.2.0-rc3, Rust 1.92.0.
 
-| scheme | N | total cycles | user cycles | segments | prove time (s) | receipt size (B) |
+| scheme | N | total cycles | user cycles | segments | prove time | receipt size (B) |
 |---|---:|---:|---:|---:|---:|---:|
-| `noop` | 1 | 131 072 | 52 705 | 1 | 23.15 | 245 306 |
-| `ecdsa-secp256k1` | 1 | 524 288 | 372 875 | 1 | 141.47 | 492 375 |
-| `ecdsa-secp256k1` | 3 | 1 310 720 | 1 072 214 | 2 | 260.13 | 763 049 |
-| `schnorr-secp256k1` | 1 | 524 288 | 342 849 | 1 | 77.82 | 269 234 |
-| `schnorr-secp256k1` | 3 | 1 114 112 | 998 530 | 2 | 166.46 | 505 140 |
-| `ed25519` | 1 | 1 048 576 | 918 700 | 1 | 153.97 | 282 482 |
-| `ed25519` | 3 | 3 145 728 | 2 726 208 | 3 | 451.82 | 846 678 |
-| `ecdsa-p256` | 1 | 524 288 | 270 305 | 1 | 71.44 | 269 242 |
-| `ecdsa-p256` | 3 | 1 048 576 | 770 910 | 1 | 141.36 | 284 074 |
+| `noop` | 1 | 131 072 | 52 705 | 1 | 23.15 s (~0:23) | 245 306 |
+| `ecdsa-secp256k1` | 1 | 524 288 | 372 875 | 1 | 141.47 s (~2:21) | 492 375 |
+| `ecdsa-secp256k1` | 3 | 1 310 720 | 1 072 214 | 2 | 260.13 s (~4:20) | 763 049 |
+| `schnorr-secp256k1` | 1 | 524 288 | 342 849 | 1 | 77.82 s (~1:18) | 269 234 |
+| `schnorr-secp256k1` | 3 | 1 114 112 | 998 530 | 2 | 166.46 s (~2:46) | 505 140 |
+| `ed25519` | 1 | 1 048 576 | 918 700 | 1 | 153.97 s (~2:34) | 282 482 |
+| `ed25519` | 3 | 3 145 728 | 2 726 208 | 3 | 451.82 s (~7:32) | 846 678 |
+| `ecdsa-p256` | 1 | 524 288 | 270 305 | 1 | 71.44 s (~1:11) | 269 242 |
+| `ecdsa-p256` | 3 | 1 048 576 | 770 910 | 1 | 141.36 s (~2:21) | 284 074 |
 
 The `noop` row is the NSSA-wrap-only calibration baseline (52 705 user
 cycles with empty pre-states, no crypto). Subtract it from any other
@@ -101,12 +101,12 @@ Given the prove times above on a CPU-only Ryzen 9 7940HS:
 
 | TX prove budget | What fits |
 |---|---|
-| **30 s** | only the `noop` baseline (no crypto) |
-| **60 s** | nothing in scope |
-| **90 s** | `ecdsa-p256` n=1 (71 s); `schnorr-secp256k1` n=1 (78 s) |
-| **3 min** | adds `ecdsa-secp256k1` n=1 (141 s), `ecdsa-p256` n=3 (141 s), `ed25519` n=1 (154 s) |
-| **5 min** | adds `schnorr-secp256k1` n=3 (166 s), `ecdsa-secp256k1` n=3 (260 s) |
-| **8 min** | adds `ed25519` n=3 (452 s) |
+| **30 s** | only the `noop` baseline (~0:23, no crypto) |
+| **1 min** | nothing in scope |
+| **1.5 min** | `ecdsa-p256` n=1 (~1:11); `schnorr-secp256k1` n=1 (~1:18) |
+| **3 min** | adds `ecdsa-secp256k1` n=1 (~2:21), `ecdsa-p256` n=3 (~2:21), `ed25519` n=1 (~2:34), `schnorr-secp256k1` n=3 (~2:46) |
+| **5 min** | adds `ecdsa-secp256k1` n=3 (~4:20) |
+| **8 min** | adds `ed25519` n=3 (~7:32) |
 
 For interactive RedStone-style oracle UX (3-of-N pulls, sub-30 s),
 **no scheme fits on CPU**. CUDA / Bonsai would compress this
