@@ -18,6 +18,14 @@ members = [
 [workspace.lints.rust]
 unsafe_code = "warn"
 
+# Tight release profile. RISC0 guests page from the ELF, so smaller +
+# better-optimized binaries reduce both cycle count and ELF footprint.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
 [workspace.dependencies]
 nssa = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.0-rc3" }
 nssa_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.0-rc3" }

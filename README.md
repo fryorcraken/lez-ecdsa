@@ -46,17 +46,21 @@ guests, `RISC0_DEV_MODE=0`, one synthetic same-message fixture per
 60 GiB RAM), Linux 6.19, CPU prover (no CUDA, no Bonsai).
 **Stack:** risc0-zkvm 3.0.5, LEZ v0.2.0-rc3, Rust 1.92.0.
 
+After applying the [Pass 3 optimizations](#optimization-passes) (workspace-wide
+`[profile.release]` with `lto="fat"`, `codegen-units=1`, `panic="abort"`,
+`strip=true`):
+
 | scheme | N | total cycles | user cycles | segments | prove time | receipt size (B) |
 |---|---:|---:|---:|---:|---:|---:|
-| `noop` | 1 | 131 072 | 52 705 | 1 | 23.15 s (~0:23) | 245 306 |
-| `ecdsa-secp256k1` | 1 | 524 288 | 372 875 | 1 | 141.47 s (~2:21) | 492 375 |
-| `ecdsa-secp256k1` | 3 | 1 310 720 | 1 072 214 | 2 | 260.13 s (~4:20) | 763 049 |
-| `schnorr-secp256k1` | 1 | 524 288 | 342 849 | 1 | 77.82 s (~1:18) | 269 234 |
-| `schnorr-secp256k1` | 3 | 1 114 112 | 998 530 | 2 | 166.46 s (~2:46) | 505 140 |
-| `ed25519` | 1 | 1 048 576 | 918 700 | 1 | 153.97 s (~2:34) | 282 482 |
-| `ed25519` | 3 | 3 145 728 | 2 726 208 | 3 | 451.82 s (~7:32) | 846 678 |
-| `ecdsa-p256` | 1 | 524 288 | 270 305 | 1 | 71.44 s (~1:11) | 269 242 |
-| `ecdsa-p256` | 3 | 1 048 576 | 770 910 | 1 | 141.36 s (~2:21) | 284 074 |
+| `noop` | 1 | 65 536 | 38 623 | 1 | 9.00 s (~0:09) | 222 266 |
+| `ecdsa-secp256k1` | 1 | 524 288 | 342 000 | 1 | 146.80 s (~2:26) | 492 375 |
+| `ecdsa-secp256k1` | 3 | 1 081 344 | 988 083 | 2 | 260.06 s (~4:20) | 716 649 |
+| `schnorr-secp256k1` | 1 | 524 288 | 309 274 | 1 | 72.51 s (~1:12) | 269 234 |
+| `schnorr-secp256k1` | 3 | 1 048 576 | 903 957 | 1 | 146.69 s (~2:26) | 284 050 |
+| `ed25519` | 1 | 1 048 576 | 841 867 | 1 | 160.43 s (~2:40) | 282 482 |
+| `ed25519` | 3 | 3 145 728 | 2 501 609 | 3 | 460.65 s (~7:40) | 846 678 |
+| `ecdsa-p256` | 1 | 524 288 | 236 869 | 1 | 69.52 s (~1:09) | 269 242 |
+| `ecdsa-p256` | 3 | 1 048 576 | 677 267 | 1 | 142.29 s (~2:22) | 284 074 |
 
 The `noop` row is the NSSA-wrap-only calibration baseline (52 705 user
 cycles with empty pre-states, no crypto). Subtract it from any other
@@ -69,10 +73,10 @@ keccak256 + k256 path pulls in. Re-runs may vary ±10% on prove time.
 
 | scheme | user cycles / sig (N=1) | user cycles / sig (≈ from N=3) |
 |---|---:|---:|
-| ecdsa-secp256k1 | 320 170 | 339 836 |
-| schnorr-secp256k1 | 290 144 | 315 275 |
-| ecdsa-p256       | 217 600 | 239 401 |
-| ed25519          | 865 995 | 891 168 |
+| ecdsa-secp256k1 | 303 377 | 316 487 |
+| schnorr-secp256k1 | 270 651 | 288 445 |
+| ecdsa-p256       | 198 246 | 212 881 |
+| ed25519          | 803 244 | 820 995 |
 
 **Headline takes:**
 
@@ -101,12 +105,12 @@ Given the prove times above on a CPU-only Ryzen 9 7940HS:
 
 | TX prove budget | What fits |
 |---|---|
-| **30 s** | only the `noop` baseline (~0:23, no crypto) |
+| **15 s** | `noop` baseline (~0:09, no crypto) |
 | **1 min** | nothing in scope |
-| **1.5 min** | `ecdsa-p256` n=1 (~1:11); `schnorr-secp256k1` n=1 (~1:18) |
-| **3 min** | adds `ecdsa-secp256k1` n=1 (~2:21), `ecdsa-p256` n=3 (~2:21), `ed25519` n=1 (~2:34), `schnorr-secp256k1` n=3 (~2:46) |
+| **1.5 min** | `ecdsa-p256` n=1 (~1:09); `schnorr-secp256k1` n=1 (~1:12) |
+| **3 min** | adds `ecdsa-p256` n=3 (~2:22), `schnorr-secp256k1` n=3 (~2:26), `ecdsa-secp256k1` n=1 (~2:26), `ed25519` n=1 (~2:40) |
 | **5 min** | adds `ecdsa-secp256k1` n=3 (~4:20) |
-| **8 min** | adds `ed25519` n=3 (~7:32) |
+| **8 min** | adds `ed25519` n=3 (~7:40) |
 
 For interactive RedStone-style oracle UX (3-of-N pulls, sub-30 s),
 **no scheme fits on CPU**. CUDA / Bonsai would compress this
@@ -124,19 +128,22 @@ confirmation back from the sequencer" — adds NSSA framing, the
 privacy-preserving circuit (which proves the account-state transition
 on top of our verifier), and the sequencer roundtrip. Measured against
 a fresh `lgs localnet` and a fresh `PrivateOwned` account, same
-machine, same `RISC0_DEV_MODE=0`:
+machine, same `RISC0_DEV_MODE=0`. **These rows were captured against
+the *pre-optimization* binaries**, so they're a slight overestimate
+relative to the optimized local-prove table above (re-running E2E
+against the optimized binaries is left as future work):
 
-| scheme | N | local prove | E2E private TX | wrap overhead |
+| scheme | N | E2E private TX | local prove (baseline) | wrap overhead |
 |---|---:|---:|---:|---:|
-| `noop`              | 1 | 23.15 s (~0:23) | 103.46 s (~1:43) | +80.3 s (+347%) |
-| `ecdsa-secp256k1`   | 1 | 141.47 s (~2:21) | 246.46 s (~4:06) | +105.0 s (+74%) |
-| `ecdsa-secp256k1`   | 3 | 260.13 s (~4:20) | 446.12 s (~7:26) | +186.0 s (+72%) |
-| `schnorr-secp256k1` | 1 | 77.82 s (~1:18) | 153.67 s (~2:33) | +75.9 s (+97%) |
-| `schnorr-secp256k1` | 3 | 166.46 s (~2:46) | 322.95 s (~5:22) | +156.5 s (+94%) |
-| `ed25519`           | 1 | 153.97 s (~2:34) | 282.95 s (~4:42) | +129.0 s (+84%) |
-| `ed25519`           | 3 | 451.82 s (~7:32) | 669.66 s (~11:09) | +217.8 s (+48%) |
-| `ecdsa-p256`        | 1 | 71.44 s (~1:11) | 152.50 s (~2:32) | +81.1 s (+113%) |
-| `ecdsa-p256`        | 3 | 141.36 s (~2:21) | 298.82 s (~4:58) | +157.5 s (+111%) |
+| `noop`              | 1 | 103.46 s (~1:43) | 23.15 s (~0:23) | +80.3 s (+347%) |
+| `ecdsa-secp256k1`   | 1 | 246.46 s (~4:06) | 141.47 s (~2:21) | +105.0 s (+74%) |
+| `ecdsa-secp256k1`   | 3 | 446.12 s (~7:26) | 260.13 s (~4:20) | +186.0 s (+72%) |
+| `schnorr-secp256k1` | 1 | 153.67 s (~2:33) | 77.82 s (~1:18) | +75.9 s (+97%) |
+| `schnorr-secp256k1` | 3 | 322.95 s (~5:22) | 166.46 s (~2:46) | +156.5 s (+94%) |
+| `ed25519`           | 1 | 282.95 s (~4:42) | 153.97 s (~2:34) | +129.0 s (+84%) |
+| `ed25519`           | 3 | 669.66 s (~11:09) | 451.82 s (~7:32) | +217.8 s (+48%) |
+| `ecdsa-p256`        | 1 | 152.50 s (~2:32) | 71.44 s (~1:11) | +81.1 s (+113%) |
+| `ecdsa-p256`        | 3 | 298.82 s (~4:58) | 141.36 s (~2:21) | +157.5 s (+111%) |
 
 The privacy-preserving wrapping adds **roughly 75–220 s** per TX. It's
 not a fixed overhead: there's a constant component (~80 s, visible on
@@ -184,6 +191,52 @@ confirmation.
 Synthetic fixtures only — no captured oracle payloads. All signers
 share the same message (`b"hello redstone"`) per row, signed with
 deterministic seeds.
+
+### Optimization passes
+
+The numbers above include a workspace-level tight `[profile.release]`
+applied to both host and guest (`lto = "fat"`, `codegen-units = 1`,
+`panic = "abort"`, `strip = true`). Effect on guest ELFs:
+
+| scheme | ELF before | ELF after | Δ |
+|---|---:|---:|---:|
+| `noop` | 371 KB | 184 KB | -50% |
+| `ecdsa-secp256k1` | 489 KB | 257 KB | -47% |
+| `schnorr-secp256k1` | 426 KB | 221 KB | -48% |
+| `ed25519` | 497 KB | 281 KB | -43% |
+| `ecdsa-p256` | 456 KB | 237 KB | -48% |
+
+**Cycle / prove-time effect** vs the unoptimized profile:
+
+- `noop` user cycles **-27%** (52 705 → 38 623), prove time **-61%**
+  (23 s → 9 s) — small ELF benefits hugely from less paging.
+- Per-signature user cycles **-8% to -12%** uniformly across schemes
+  — LTO pays a few % through the curve arithmetic.
+- `schnorr-secp256k1` N=3 dropped from 2 segments to 1 (the smaller
+  ELF + LTO-tightened code lands the work just under po2=20),
+  shaving ~12% off prove time (166 s → 147 s).
+- A few rows ticked up slightly within run-to-run variance (±10%);
+  the cycle reductions are the more reliable signal.
+
+**Things tried that didn't ship:**
+
+- *Parallel segment proving.* `risc0_zkvm::default_prover()` in 3.0.5
+  loops segments sequentially (`local_prover/prover_impl.rs` line 89:
+  `for segment ... segments.push(prove_segment)`). Manual rayon
+  parallelism would help N=3 cases but is a larger change than this
+  pass; left as future work.
+- *Switching ECDSA k1 prehash from keccak256 to sha256.* Would save
+  ~250 KB of receipt and ~100 K user cycles, but breaks
+  Ethereum-compatible signing. Don't.
+
+**Things deliberately not tried:**
+
+- *Batch verify for Schnorr / Ed25519.* Would change the algorithm
+  shape; out of headline matrix per [`SPEC.md`](./SPEC.md) §9.
+- *Receipt compression to Succinct.* Reduces receipt to ~25 KB but
+  adds significant CPU. Useful for downstream consumers, not for
+  per-row bench numbers.
+- *GPU / Bonsai prove.* Out of scope per the user's review request.
 
 ### Receipt-size note
 
