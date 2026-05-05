@@ -47,11 +47,12 @@ jobs:
           mkdir -p "$HOME/.logos-blockchain-circuits"
           # Find any release that ships the circuits artifact — the same
           # tarball is attached to every logos-blockchain release.
-          asset_url=$(
-            gh api repos/logos-blockchain/logos-blockchain/releases --paginate \
-              --jq ".[] | .assets[] | select(.name == \"logos-blockchain-circuits-${LOGOS_BLOCKCHAIN_CIRCUITS_VERSION}-linux-x86_64.tar.gz\") | .browser_download_url" \
-              | head -n1
-          )
+          # Write URLs to a file rather than `| head -n1` to avoid SIGPIPE
+          # (gh api is killed when head closes; under pipefail that's exit 141).
+          gh api repos/logos-blockchain/logos-blockchain/releases --paginate \
+            --jq ".[] | .assets[] | select(.name == \"logos-blockchain-circuits-${LOGOS_BLOCKCHAIN_CIRCUITS_VERSION}-linux-x86_64.tar.gz\") | .browser_download_url" \
+            > /tmp/urls.txt
+          asset_url="$(head -n1 /tmp/urls.txt)"
           test -n "$asset_url"
           curl -fLsS "$asset_url" -o /tmp/circuits.tar.gz
           tar -C "$HOME/.logos-blockchain-circuits" --strip-components=1 -xzf /tmp/circuits.tar.gz
@@ -74,11 +75,12 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p "$HOME/.logos-blockchain-circuits"
-          asset_url=$(
-            gh api repos/logos-blockchain/logos-blockchain/releases --paginate \
-              --jq ".[] | .assets[] | select(.name == \"logos-blockchain-circuits-${LOGOS_BLOCKCHAIN_CIRCUITS_VERSION}-linux-x86_64.tar.gz\") | .browser_download_url" \
-              | head -n1
-          )
+          # Write URLs to a file rather than `| head -n1` to avoid SIGPIPE
+          # (gh api is killed when head closes; under pipefail that's exit 141).
+          gh api repos/logos-blockchain/logos-blockchain/releases --paginate \
+            --jq ".[] | .assets[] | select(.name == \"logos-blockchain-circuits-${LOGOS_BLOCKCHAIN_CIRCUITS_VERSION}-linux-x86_64.tar.gz\") | .browser_download_url" \
+            > /tmp/urls.txt
+          asset_url="$(head -n1 /tmp/urls.txt)"
           test -n "$asset_url"
           curl -fLsS "$asset_url" -o /tmp/circuits.tar.gz
           tar -C "$HOME/.logos-blockchain-circuits" --strip-components=1 -xzf /tmp/circuits.tar.gz
