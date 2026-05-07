@@ -110,4 +110,18 @@ pub mod verifier {
             Ok(())
         }
     }
+
+    pub mod lms {
+        use super::super::VerifyInput;
+        use alloc::string::{String, ToString};
+        use hbs_lms::{Sha256_256, verify};
+
+        pub fn verify_all(input: &VerifyInput) -> Result<(), String> {
+            for s in &input.signers {
+                verify::<Sha256_256>(&input.message, &s.signature, &s.pubkey)
+                    .map_err(|_| "verify".to_string())?;
+            }
+            Ok(())
+        }
+    }
 }

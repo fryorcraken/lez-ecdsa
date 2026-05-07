@@ -18,6 +18,10 @@ consumer hardware.
 - secp256k1 Schnorr (BIP-340)
 - Ed25519
 - P-256 ECDSA
+- LMS (RFC 8554, hash-based, post-quantum) — included as a
+  "post-quantum cost on this stack" data point. Not RISC0-precompiled
+  in the curve sense, but its inner SHA-256 calls dispatch to the SHA
+  precompile via the patched `sha2` crate.
 
 **Multiplicities:** N = 1 and N = 3 (3-of-5 RedStone-shaped, same
 message across all signers).
@@ -48,6 +52,11 @@ decision note are the primary artifacts.
     NIST P-256 ECDSA, same fork as k256, same bigint2 acceleration.
   - `tiny-keccak v2.0.2-risczero.0`, `sha2 v0.10.9-risczero.0`,
     `crypto-bigint v0.5.5-risczero.0`
+  - `hbs-lms 0.2.0-alpha.1` (Fraunhofer AISEC, pure-Rust, `no_std`).
+    No RISC0 fork exists; acceleration comes solely from its `sha2`
+    dependency hitting the SHA precompile via the workspace patch.
+    Parameters used: `Sha256_256` / `LmotsW8` / `LmsH5` (single-tree HSS,
+    32 leaves, smallest signature tradeoff).
 
 ## 3. Commands
 
@@ -222,7 +231,8 @@ The bench is complete when **all** of these are demonstrably true:
   headline matrix. Optional follow-up if 3-of-5 numbers warrant.
 - **N > 3 or N-sweep.** Only the winning scheme might get a sweep, and
   only if the budget framing demands it.
-- **BLS, RSA, Lamport, SPHINCS+, post-quantum schemes.** Out of scope.
+- **BLS, RSA, Lamport, SPHINCS+.** Out of scope. (LMS is the one
+  hash-based / post-quantum scheme included — see §1.)
 - **Multi-machine numbers.** Single machine only; cycles generalize,
   prove-time doesn't.
 - **Production deployment** of any scheme. Measurement only.

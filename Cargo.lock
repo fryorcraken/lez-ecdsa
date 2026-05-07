@@ -1576,7 +1576,7 @@ dependencies = [
  "elliptic-curve",
  "rfc6979",
  "serdect",
- "signature",
+ "signature 2.2.0",
  "spki",
 ]
 
@@ -1588,7 +1588,7 @@ checksum = "115531babc129696a58c64a4fef0a8bf9e9698629fb97e9e40767d235cfbcd53"
 dependencies = [
  "pkcs8",
  "serde",
- "signature",
+ "signature 2.2.0",
 ]
 
 [[package]]
@@ -2096,6 +2096,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7382cf6263419f2d8df38c55d7da83da5c18aef87fc7a7fc1fb1e344edfe14c1"
 dependencies = [
  "hashbrown 0.15.5",
+]
+
+[[package]]
+name = "hbs-lms"
+version = "0.2.0-alpha.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "024739dc43a6da5138b8392d4d373af06b4273a7ff2e91002c1555d1b2c0905a"
+dependencies = [
+ "digest",
+ "sha2",
+ "sha3",
+ "signature 1.6.4",
+ "subtle",
+ "tinyvec",
+ "zeroize",
 ]
 
 [[package]]
@@ -2819,7 +2834,7 @@ dependencies = [
  "risc0-bigint2",
  "serdect",
  "sha2",
- "signature",
+ "signature 2.2.0",
 ]
 
 [[package]]
@@ -2898,6 +2913,7 @@ dependencies = [
  "clap",
  "common",
  "ed25519-dalek",
+ "hbs-lms",
  "hex",
  "k256",
  "lez_signature_bench_methods",
@@ -2926,6 +2942,7 @@ name = "lez_signature_bench_programs"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
+ "hbs-lms",
  "k256",
  "nssa_core",
  "p256",
@@ -4872,7 +4889,7 @@ dependencies = [
  "pkcs1",
  "pkcs8",
  "rand_core 0.6.4",
- "signature",
+ "signature 2.2.0",
  "spki",
  "subtle",
  "zeroize",
@@ -5311,6 +5328,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha3"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77fd7028345d415a4034cf8777cd4f8ab1851274233b45f84e3d955502d93874"
+dependencies = [
+ "digest",
+ "keccak",
+]
+
+[[package]]
 name = "sharded-slab"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5334,6 +5361,12 @@ dependencies = [
  "errno",
  "libc",
 ]
+
+[[package]]
+name = "signature"
+version = "1.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74233d3b3b2f6d4b006dc19dee745e73e2a6bfb6f93607cd3b02bd5b00797d7c"
 
 [[package]]
 name = "signature"

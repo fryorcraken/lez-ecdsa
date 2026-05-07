@@ -11,6 +11,7 @@ serde.workspace = true
 k256 = { workspace = true, features = ["arithmetic"] }
 p256 = { workspace = true, features = ["arithmetic"] }
 ed25519-dalek.workspace = true
+hbs-lms.workspace = true
 sha2.workspace = true
 tiny-keccak.workspace = true
 
@@ -32,6 +33,11 @@ test = false
 [[bin]]
 name = "ecdsa_p256"
 path = "src/bin/ecdsa_p256.rs"
+test = false
+
+[[bin]]
+name = "lms"
+path = "src/bin/lms.rs"
 test = false
 
 [[bin]]

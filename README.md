@@ -23,18 +23,22 @@ See [`SPEC.md`](./SPEC.md) for acceptance criteria and
 
 ## Schemes in scope
 
-| Scheme | Curve | Prehash | RISC0 patch source |
+| Scheme | Curve / family | Prehash | RISC0 patch source |
 |---|---|---|---|
 | ECDSA secp256k1 | secp256k1 | keccak256 | `k256/v0.13.4-risczero.1` |
 | Schnorr secp256k1 (BIP-340) | secp256k1 | sha256 | (same fork as ECDSA) |
 | Ed25519 | Curve25519 | none (sha512 internal) | `curve25519-4.1.3-risczero.0` |
 | ECDSA P-256 | NIST P-256 | sha256 | `p256/v0.13.2-risczero.1` |
+| LMS (RFC 8554) | hash-based, post-quantum | sha256 (whole construction) | `hbs-lms 0.2.0-alpha.1` (no RISC0 fork; rides the patched `sha2`) |
 
-All four schemes hit RISC Zero's `bigint2` / curve precompile path —
+The four EC schemes hit RISC Zero's `bigint2` / curve precompile path —
 verified in the Phase 1 spike. Schnorr secp256k1 routes through the
 same `ProjectivePoint::lincomb` accelerated path that ECDSA secp256k1
 uses (no separate code path); Ed25519 uses curve25519-dalek's
-`backend/serial/risc0` module.
+`backend/serial/risc0` module. **LMS** has no RISC0 fork; its only
+acceleration is the SHA-256 precompile reached transitively through
+the patched `sha2` crate. Parameters used: `Sha256_256` / `LmotsW8` /
+`LmsH5` (single-tree HSS, 32 leaves, smallest-signature tradeoff).
 
 ## Results
 
@@ -61,6 +65,8 @@ After applying the [Pass 3 optimizations](#optimization-passes) (workspace-wide
 | `ed25519` | 3 | 3 145 728 | 2 501 609 | 3 | 460.65 s (~7:40) | 846 678 |
 | `ecdsa-p256` | 1 | 524 288 | 236 869 | 1 | 69.52 s (~1:09) | 269 242 |
 | `ecdsa-p256` | 3 | 1 048 576 | 677 267 | 1 | 142.29 s (~2:22) | 284 074 |
+| `lms` | 1 | 3 145 728 | 2 720 550 | 3 | 531.95 s (~8:51) | 855 190 |
+| `lms` | 3 | 8 912 896 | 8 281 737 | 9 | 1 349.76 s (~22:29) | 2 551 554 |
 
 The `noop` row is the NSSA-wrap-only calibration baseline (52 705 user
 cycles with empty pre-states, no crypto). Subtract it from any other
@@ -77,6 +83,7 @@ keccak256 + k256 path pulls in. Re-runs may vary ±10% on prove time.
 | schnorr-secp256k1 | 270 651 | 288 445 |
 | ecdsa-p256       | 198 246 | 212 881 |
 | ed25519          | 803 244 | 820 995 |
+| lms              | 2 681 927 | 2 747 705 |
 
 **Headline takes:**
 
@@ -98,6 +105,17 @@ keccak256 + k256 path pulls in. Re-runs may vary ±10% on prove time.
   **+320–340K user cycles per added secp256k1 sig**, **+870K** per
   Ed25519 sig. No batch-verify shortcuts here (out of scope per
   [`SPEC.md`](./SPEC.md) §9).
+- **LMS is ~8× the cycles and ~3.5× the prove time of secp256k1
+  ECDSA at N=1**, with a receipt 1.7× as large. Per-sig delta scales
+  cleanly (~2.7M user cycles/sig). The SHA precompile carries the
+  inner work, but signature parsing in `tinyvec` arrays + LM-OTS hash
+  chains + the per-call SHA dispatch overhead add up. **LMS does not
+  beat any RISC0-precompiled EC scheme on this stack** — its value
+  here is as a "what does post-quantum cost on RISC0 today" data point,
+  not a recommendation. Two production caveats inherent to LMS:
+  signing is *stateful* (the signer must persist a leaf counter; reuse
+  breaks security), and the keypair is one-shot exhausted after 2^h
+  signatures (h=5 → 32 sigs in this configuration).
 
 ### Decision note: budget → scheme on this laptop
 
@@ -111,6 +129,8 @@ Given the prove times above on a CPU-only Ryzen 9 7940HS:
 | **3 min** | adds `ecdsa-p256` n=3 (~2:22), `schnorr-secp256k1` n=3 (~2:26), `ecdsa-secp256k1` n=1 (~2:26), `ed25519` n=1 (~2:40) |
 | **5 min** | adds `ecdsa-secp256k1` n=3 (~4:20) |
 | **8 min** | adds `ed25519` n=3 (~7:40) |
+| **10 min** | adds `lms` n=1 (~8:51) |
+| **25 min** | adds `lms` n=3 (~22:29) |
 
 For interactive RedStone-style oracle UX (3-of-N pulls, sub-30 s),
 **no scheme fits on CPU**. CUDA / Bonsai would compress this
@@ -255,9 +275,9 @@ Ethereum compatibility.
 cargo build --workspace --release
 ```
 
-`risc0-build` cross-compiles five guest ELFs (one per scheme + the
+`risc0-build` cross-compiles six guest ELFs (one per scheme + the
 noop baseline) for `riscv32im-risc0-zkvm-elf` and embeds them as
-`{ECDSA_SECP256K1,SCHNORR_SECP256K1,ED25519,ECDSA_P256,NOOP}_ELF`.
+`{ECDSA_SECP256K1,SCHNORR_SECP256K1,ED25519,ECDSA_P256,LMS,NOOP}_ELF`.
 
 ## Run the bench
 
@@ -294,8 +314,9 @@ end-to-end matrix takes **~46 minutes** end-to-end (kernel + wrapping
 ```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace      # 9 host tests: byte-stable wire format,
-                            # positive + negative round-trip per scheme
+cargo test --workspace      # 12 host tests: byte-stable wire format
+                            # (ecdsa-k1, lms), positive + negative
+                            # round-trip per scheme
 ```
 
 CI (`.github/workflows/ci.yml`) runs the fmt + clippy + build set on
@@ -325,6 +346,7 @@ every push and PR. Bench runs are local only.
 │           ├── schnorr_secp256k1.rs
 │           ├── ed25519.rs
 │           ├── ecdsa_p256.rs
+│           ├── lms.rs                    # hash-based / post-quantum row
 │           └── noop.rs                   # NSSA-wrap-only calibration
 ├── src/
 │   ├── lib.rs                            # Scheme enum + host-side fixtures + verify_all
