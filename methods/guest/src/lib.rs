@@ -124,4 +124,36 @@ pub mod verifier {
             Ok(())
         }
     }
+
+    pub mod xmss {
+        use super::super::VerifyInput;
+        use alloc::string::{String, ToString};
+        use xmss::{DetachedSignature, VerifyingKey, XmssSha2_10_256};
+
+        pub fn verify_all(input: &VerifyInput) -> Result<(), String> {
+            for s in &input.signers {
+                let vk = VerifyingKey::<XmssSha2_10_256>::try_from(s.pubkey.as_slice())
+                    .map_err(|e| ToString::to_string(&e))?;
+                let sig = DetachedSignature::<XmssSha2_10_256>::try_from(s.signature.as_slice())
+                    .map_err(|e| ToString::to_string(&e))?;
+                vk.verify_detached(&sig, &input.message)
+                    .map_err(|e| ToString::to_string(&e))?;
+            }
+            Ok(())
+        }
+    }
+
+    pub mod lms_w1 {
+        use super::super::VerifyInput;
+        use alloc::string::{String, ToString};
+        use hbs_lms::{Sha256_256, verify};
+
+        pub fn verify_all(input: &VerifyInput) -> Result<(), String> {
+            for s in &input.signers {
+                verify::<Sha256_256>(&input.message, &s.signature, &s.pubkey)
+                    .map_err(|_| "verify".to_string())?;
+            }
+        Ok(())
+        }
+    }
 }
