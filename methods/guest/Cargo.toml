@@ -5,6 +5,7 @@ edition = "2024"
 license = { workspace = true }
 
 [dependencies]
+xmss = { workspace = true }
 risc0-zkvm.workspace = true
 nssa_core.workspace = true
 serde.workspace = true
@@ -43,4 +44,14 @@ test = false
 [[bin]]
 name = "noop"
 path = "src/bin/noop.rs"
+test = false
+
+[[bin]]
+name = "xmss"
+path = "src/bin/xmss.rs"
+test = false
+
+[[bin]]
+name = "lms_w1"
+path = "src/bin/lms_w1.rs"
 test = false

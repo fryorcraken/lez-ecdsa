@@ -16,6 +16,8 @@ pub enum Scheme {
     Ed25519,
     EcdsaP256,
     Lms,
+    LmsW1,
+    Xmss,
 }
 
 impl Scheme {
@@ -25,6 +27,8 @@ impl Scheme {
         Scheme::Ed25519,
         Scheme::EcdsaP256,
         Scheme::Lms,
+        Scheme::LmsW1,
+        Scheme::Xmss,
     ];
 
     pub fn slug(self) -> &'static str {
@@ -34,6 +38,8 @@ impl Scheme {
             Scheme::Ed25519 => "ed25519",
             Scheme::EcdsaP256 => "ecdsa-p256",
             Scheme::Lms => "lms",
+            Scheme::LmsW1 => "lms-w1",
+	    Scheme::Xmss => "xmss",
         }
     }
 
@@ -110,6 +116,8 @@ pub fn make_test_vector(scheme: Scheme, num_signers: usize) -> VerifyInput {
             Scheme::Ed25519 => verifier::ed25519::sign(seed, MESSAGE),
             Scheme::EcdsaP256 => verifier::ecdsa_p256::sign(seed, MESSAGE),
             Scheme::Lms => verifier::lms::sign(seed, MESSAGE),
+            Scheme::LmsW1 => verifier::lms_w1::sign(seed, MESSAGE),
+            Scheme::Xmss => verifier::xmss::sign(seed, MESSAGE),
         })
         .collect();
 
@@ -127,6 +135,8 @@ pub fn verify(scheme: Scheme, input: &VerifyInput) -> Result<(), String> {
         Scheme::Ed25519 => verifier::ed25519::verify_all(input),
         Scheme::EcdsaP256 => verifier::ecdsa_p256::verify_all(input),
         Scheme::Lms => verifier::lms::verify_all(input),
+        Scheme::LmsW1 => verifier::lms_w1::verify_all(input),
+	Scheme::Xmss => verifier::xmss::verify_all(input),
     }
 }
 
